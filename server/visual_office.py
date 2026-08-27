@@ -266,6 +266,31 @@ class Handler(BaseHTTPRequestHandler):
 
         self.app.written = roster
         self.app.written_at = time.time()
+
+        # แถบข้างต้องตรงกับไฟล์ที่เพิ่งเขียนทันที · เดิมมันรอให้ปลั๊กอินมาประกาศรายชื่อ
+        # ซึ่งเกิดตอน Hermes รันรอบถัดไปเท่านั้น — ลบโต๊ะแล้วมันจึงยังอยู่บนจอจนกว่าจะมี
+        # ใครไปคุยกับ Hermes สักที ซึ่งดูเหมือนการลบไม่ทำงาน
+        announcement = {
+            "event": "roster",
+            "at": self.app.written_at,
+            "roster": {
+                "office_name": roster["office_name"],
+                "gateway_base_url": roster["gateway_base_url"],
+                "desks": roster["desks"],
+                "source": str(target),
+                # หอบค่าที่ปลั๊กอินเป็นคนรู้มาด้วย — _apply_roster เขียนทับทุกครั้งที่รับ
+                # roster ใหม่ ไม่ได้เว้นให้เมื่อไม่มีค่ามา · ไม่ส่งไปคือลบทิ้งเงียบ ๆ
+                "agent_model": self.app.office.agent_model,
+                "main_model": self.app.office.main_model,
+                "available_models": self.app.office.available_models,
+            },
+        }
+        self.app.office.apply(announcement)
+        # ลงบันทึกด้วย ไม่ใช่แค่ในหน่วยความจำ · log ถูก replay ตอนเซิร์ฟเวอร์เริ่มใหม่
+        # ถ้าไม่เขียน รายชื่อเก่าที่ประกาศไว้ก่อนหน้าจะเป็นตัวสุดท้ายในบันทึก แล้วโต๊ะที่
+        # เพิ่งลบไปก็ฟื้นกลับมาทั้งชุดหลัง restart
+        self.app.log.append(announcement)
+
         self._json(200, {
             "ok": True,
             "path": str(target),

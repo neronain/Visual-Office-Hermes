@@ -439,6 +439,11 @@ class Office:
             )
         if order:
             self.desk_order = order
+            # โต๊ะที่หายไปจากรายชื่อต้องหายไปจากห้องด้วย · self.desks เก็บสะสมไว้เรื่อย ๆ
+            # โต๊ะที่ถูกลบจึงค้างอยู่ในหน่วยความจำตลอดอายุโปรเซส และโผล่กลับมาทันทีที่มี
+            # ใครมาอ่าน snapshot · ยอดรวมไม่หายไปด้วยเพราะมันเก็บแยกใน totals/by_model
+            for gone in [d for d in self.desks if d not in set(order)]:
+                del self.desks[gone]
 
     # -- snapshot -----------------------------------------------------------
 
