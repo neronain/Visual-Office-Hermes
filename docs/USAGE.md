@@ -117,10 +117,15 @@ hermes -z "ข้อความ" --yolo   # สั่งครั้งเด�
 > hermes gateway restart
 > ```
 >
-> เช็คว่าโหลดแล้ว — ต้องได้มากกว่า 0:
+> เช็คว่าโหลดแล้ว — ปลั๊กอินเขียน log ลง **`agent.log`** ไม่ใช่ `gateway.log`
+> (หา `visual_office` ใน `gateway.log` จะได้ 0 เสมอแม้ทุกอย่างปกติ):
 > ```bash
-> grep -c visual_office ~/.hermes/logs/gateway.log
+> grep "visual_office ready" ~/.hermes/logs/agent.log | tail -1
 > ```
+> เทียบเวลาที่ได้กับเวลาที่ gateway เริ่ม — ถ้าใหม่กว่า แปลว่า gateway ตัวปัจจุบันโหลดแล้ว
+>
+> หรือเช็คจากปลายทางเลย: สั่งงานผ่าน Telegram หนึ่งครั้ง แล้วดูว่ามีตัวละครชื่อ
+> `telegram` โผล่ในห้องไหม
 
 ---
 

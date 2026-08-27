@@ -159,7 +159,9 @@ desks:
 
 > ⚠️ ติดตั้งหรืออัปเดตปลั๊กอินแล้ว **ต้อง `hermes gateway restart`** ถ้าสั่งงานผ่าน
 > Telegram/Discord — gateway เป็นคนละ process กับ CLI และปลั๊กอินโหลดตอน process
-> เริ่มเท่านั้น · ดู [docs/USAGE.md](docs/USAGE.md)
+> เริ่มเท่านั้น · ตรวจว่าโหลดแล้วด้วย
+> `grep "visual_office ready" ~/.hermes/logs/agent.log | tail -1`
+> (**agent.log** ไม่ใช่ gateway.log) · ดู [docs/USAGE.md](docs/USAGE.md)
 
 ### ตัวละครทำอะไรบ้าง
 
