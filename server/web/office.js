@@ -63,7 +63,12 @@ const ctx = canvas.getContext('2d');
 let snapshot = null;
 const actors = new Map();
 const art = { furniture: {}, floors: [], walls: null, chars: [], ready: false };
-const view = { s: 1, ox: 0, oy: 0 };
+/* Pixel art only survives whole-number zoom — a fractional scale smears every
+   sprite edge, which is exactly the "แตกๆ" look. So the scale is always an
+   integer, and the +/- buttons step it rather than sliding it. */
+const view = { s: 1, ox: 0, oy: 0, fit: 1 };
+const zoom = { mode: 'fit', level: 2, panX: 0, panY: 0 };
+const MAX_ZOOM = 8;
 let plan = null;
 let frame = 0;
 
@@ -537,10 +542,17 @@ function tick() {
   plan = planOffice(desks);
   plan.cells.forEach((c) => { c.seats = 0; });
 
-  const pad = 12;
-  view.s = Math.max(1, Math.min((cw - pad) / plan.W, (ch - pad) / plan.H, 4));
-  view.ox = (cw - plan.W * view.s) / 2;
-  view.oy = (ch - plan.H * view.s) / 2;
+  const pad = 16;
+  view.fit = Math.max(1, Math.floor(Math.min((cw - pad) / plan.W, (ch - pad) / plan.H)));
+  view.s = zoom.mode === 'fit' ? view.fit : Math.min(MAX_ZOOM, Math.max(1, zoom.level));
+
+  const overW = Math.max(0, plan.W * view.s - cw);
+  const overH = Math.max(0, plan.H * view.s - ch);
+  zoom.panX = Math.max(-overW / 2, Math.min(overW / 2, zoom.panX));
+  zoom.panY = Math.max(-overH / 2, Math.min(overH / 2, zoom.panY));
+  view.ox = (cw - plan.W * view.s) / 2 + zoom.panX;
+  view.oy = (ch - plan.H * view.s) / 2 + zoom.panY;
+  syncZoomUi(overW > 0 || overH > 0);
 
   drawFloor();
   drawWalls();
@@ -577,6 +589,84 @@ function tick() {
 
   drawLabels(workers);
   requestAnimationFrame(tick);
+}
+
+/* ------------------------------------------------------------------ zoom ui */
+
+const ZOOM_KEY = 'visual-office.zoom';
+
+function loadZoom() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(ZOOM_KEY) || 'null');
+    if (saved && (saved.mode === 'fit' || saved.mode === 'manual')) {
+      zoom.mode = saved.mode;
+      zoom.level = Math.min(MAX_ZOOM, Math.max(1, saved.level | 0)) || 2;
+    }
+  } catch (err) {
+    /* private windows and blocked storage both land here — the default is fine */
+  }
+}
+
+function saveZoom() {
+  try {
+    localStorage.setItem(ZOOM_KEY, JSON.stringify({ mode: zoom.mode, level: zoom.level }));
+  } catch (err) { /* nothing to do; the setting is a convenience, not state */ }
+}
+
+function setZoom(level) {
+  zoom.level = Math.min(MAX_ZOOM, Math.max(1, level));
+  zoom.mode = 'manual';
+  saveZoom();
+}
+
+function syncZoomUi(pannable) {
+  const label = document.getElementById('zoom-level');
+  if (label) label.textContent = `${view.s}×${zoom.mode === 'fit' ? ' พอดี' : ''}`;
+  const out = document.getElementById('zoom-out');
+  const inc = document.getElementById('zoom-in');
+  if (out) out.disabled = view.s <= 1;
+  if (inc) inc.disabled = view.s >= MAX_ZOOM;
+  canvas.classList.toggle('grabbable', pannable && !canvas.classList.contains('grabbing'));
+}
+
+function wireZoom() {
+  loadZoom();
+  const step = (delta) => setZoom((zoom.mode === 'fit' ? view.fit : zoom.level) + delta);
+  document.getElementById('zoom-in').addEventListener('click', () => step(1));
+  document.getElementById('zoom-out').addEventListener('click', () => step(-1));
+  document.getElementById('zoom-fit').addEventListener('click', () => {
+    zoom.mode = 'fit';
+    zoom.panX = 0;
+    zoom.panY = 0;
+    saveZoom();
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.target && /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName)) return;
+    if (event.key === '+' || event.key === '=') step(1);
+    else if (event.key === '-' || event.key === '_') step(-1);
+    else if (event.key === '0') { zoom.mode = 'fit'; zoom.panX = 0; zoom.panY = 0; saveZoom(); }
+    else return;
+    event.preventDefault();
+  });
+
+  // Drag to pan, but only while the room is bigger than the window.
+  let dragging = null;
+  canvas.addEventListener('pointerdown', (event) => {
+    if (!canvas.classList.contains('grabbable')) return;
+    dragging = { x: event.clientX, y: event.clientY };
+    canvas.classList.add('grabbing');
+    canvas.setPointerCapture(event.pointerId);
+  });
+  canvas.addEventListener('pointermove', (event) => {
+    if (!dragging) return;
+    zoom.panX += event.clientX - dragging.x;
+    zoom.panY += event.clientY - dragging.y;
+    dragging = { x: event.clientX, y: event.clientY };
+  });
+  const stop = () => { dragging = null; canvas.classList.remove('grabbing'); };
+  canvas.addEventListener('pointerup', stop);
+  canvas.addEventListener('pointercancel', stop);
 }
 
 /* ------------------------------------------------------------------ panel */
@@ -672,6 +762,7 @@ function connect() {
   };
 }
 
+wireZoom();
 loadArt().then(() => {
   fetch('/api/state').then((r) => r.json()).then(apply).catch(() => {});
   connect();

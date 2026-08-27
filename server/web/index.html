@@ -26,6 +26,12 @@
 
 <main class="room">
   <canvas id="office" aria-label="ห้องทำงานพิกเซล"></canvas>
+  <div class="zoom" role="group" aria-label="ขนาดห้อง">
+    <button type="button" id="zoom-out" title="ย่อ (−)" aria-label="ย่อห้อง">−</button>
+    <button type="button" id="zoom-fit" title="พอดีหน้าจอ (0)" aria-label="ปรับให้พอดีหน้าจอ">พอดี</button>
+    <button type="button" id="zoom-in" title="ขยาย (+)" aria-label="ขยายห้อง">+</button>
+    <span id="zoom-level">1×</span>
+  </div>
   <p class="empty" id="empty">ยังไม่มีใครในห้อง — เริ่ม session ของ Hermes แล้วตัวละครจะเดินเข้ามา</p>
 </main>
 
