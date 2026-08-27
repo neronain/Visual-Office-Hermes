@@ -398,6 +398,10 @@ class Handler(BaseHTTPRequestHandler):
                     "origin": d["origin"], "provider": d.get("provider", ""),
                     "note": d.get("note", ""), "role": d.get("role", "leaf"),
                     "toolsets": list(d.get("toolsets") or []),
+                    # ตกสองช่องนี้ = หน้าจัดการโต๊ะเห็นทุกโต๊ะเป็น "ผ่าน gateway" แล้วการ
+                    # กดบันทึกครั้งถัดไปก็ลบ endpoint ของโต๊ะที่ยิงตรงทิ้งไปเงียบ ๆ
+                    "base_url": d.get("base_url", ""),
+                    "api_key_env": d.get("api_key_env", ""),
                 }
                 for d in snapshot["desks"]
             ]

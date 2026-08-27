@@ -421,6 +421,9 @@ class Office:
                     "note": str(raw.get("note") or ""),
                     "role": str(raw.get("role") or "leaf"),
                     "toolsets": list(raw.get("toolsets") or []),
+                    # ว่าง = ผ่าน gateway · หน้าจัดการโต๊ะอ่านค่านี้เพื่อรู้ว่าโต๊ะนี้ต่อทางไหน
+                    "base_url": str(raw.get("base_url") or ""),
+                    "api_key_env": str(raw.get("api_key_env") or ""),
                 }
             )
         if order:
