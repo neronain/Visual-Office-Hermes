@@ -32,6 +32,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import roster_file  # noqa: E402
 from state import Office  # noqa: E402
 
 MAX_EVENT_BYTES = 256 * 1024
@@ -115,6 +116,12 @@ class Server:
         self.office = office
         self.log = log
         self.quiet = quiet
+        # The roster this server last wrote. The office snapshot only updates
+        # when the plugin announces, which is when Hermes next runs — so between
+        # a save and the next turn the snapshot is behind the file, and serving
+        # it back to the editor would drop desks the user just added.
+        self.written: dict | None = None
+        self.written_at = 0.0
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -158,6 +165,50 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- routes -------------------------------------------------------------
 
+    def do_PUT(self) -> None:  # noqa: N802
+        path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        if path != "/api/desks":
+            self._json(404, {"error": "not found"})
+            return
+        if not self._authorized():
+            self._json(401, {"error": "bad or missing bearer token"})
+            return
+        body = self._read_json()
+        if body is None:
+            return
+        try:
+            roster = roster_file.normalize(body)
+        except roster_file.RosterError as exc:
+            self._json(400, {"error": str(exc)})
+            return
+
+        target, problem = self._roster_target()
+        if target is None:
+            self._json(409, {"error": problem})
+            return
+
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                # One backup, overwritten each save. Enough to undo the mistake
+                # you just made, which is the mistake people actually make.
+                target.with_suffix(target.suffix + ".bak").write_bytes(target.read_bytes())
+            target.write_text(roster_file.dump(roster, stamp), encoding="utf-8")
+        except OSError as exc:
+            self._json(500, {"error": f"เขียนไฟล์ไม่ได้: {exc}"})
+            return
+
+        self.app.written = roster
+        self.app.written_at = time.time()
+        self._json(200, {
+            "ok": True,
+            "path": str(target),
+            "desks": len(roster["desks"]),
+            "saved_at": stamp,
+            "note": "Hermes จะอ่านไฟล์ใหม่เองในข้อความถัดไป ไม่ต้อง restart",
+        })
+
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
         if path != "/api/events":
@@ -167,20 +218,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json(401, {"error": "bad or missing bearer token"})
             return
 
-        try:
-            length = int(self.headers.get("Content-Length") or 0)
-        except ValueError:
-            length = 0
-        if length <= 0 or length > MAX_EVENT_BYTES:
-            self._json(413, {"error": f"body must be 1..{MAX_EVENT_BYTES} bytes"})
+        event = self._read_json()
+        if event is None:
             return
-
-        try:
-            event = json.loads(self.rfile.read(length).decode("utf-8"))
-        except Exception as exc:
-            self._json(400, {"error": f"malformed JSON: {exc}"})
-            return
-        if not isinstance(event, dict) or not event.get("event"):
+        if not event.get("event"):
             self._json(400, {"error": "event must be an object with an 'event' field"})
             return
 
@@ -194,12 +235,115 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"status": "ok", "product": "Visual Office", "version": "0.1.0"})
         elif path == "/api/state":
             self._json(200, self.app.office.snapshot())
+        elif path == "/api/desks":
+            self._json(200, self._desks_payload())
+        elif path == "/api/token":
+            # The desk editor needs the write token. Hand it over only to a
+            # client on this machine — anyone else has to have been told it.
+            host = (self.client_address or ("",))[0]
+            if host in ("127.0.0.1", "::1", "localhost"):
+                self._json(200, {"token": self.app.token})
+            else:
+                self._json(403, {"error": "token is only served to localhost"})
         elif path == "/api/stream":
             self._stream()
         elif path in ("/", "/index.html"):
             self._static("index.html")
         else:
             self._static(path.lstrip("/"))
+
+    def _read_json(self) -> dict | None:
+        """Read a JSON object body, or answer the client and return None."""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length <= 0 or length > MAX_EVENT_BYTES:
+            self._json(413, {"error": f"body must be 1..{MAX_EVENT_BYTES} bytes"})
+            return None
+        try:
+            body = json.loads(self.rfile.read(length).decode("utf-8"))
+        except Exception as exc:
+            self._json(400, {"error": f"malformed JSON: {exc}"})
+            return None
+        if not isinstance(body, dict):
+            self._json(400, {"error": "body must be a JSON object"})
+            return None
+        return body
+
+    def _roster_target(self) -> tuple[Path | None, str]:
+        """The desks.yaml this server may write, or why it may not.
+
+        The plugin reports the path it reads. If that path is not on this
+        machine, editing here would write a file Hermes never opens — so refuse
+        and say where the real one is, rather than saving into the void.
+        """
+        source = (self.app.office.roster_source or "").strip()
+        if source:
+            target = Path(source)
+            if target.parent.is_dir():
+                return target, ""
+            return None, (
+                f"Hermes อ่านรายชื่อโต๊ะจาก {source} ซึ่งไม่ได้อยู่บนเครื่องนี้ — "
+                "แก้จากหน้าเว็บได้เฉพาะตอนที่เซิร์ฟเวอร์ห้องรันเครื่องเดียวกับ Hermes"
+            )
+        fallback = default_state_dir() / "desks.yaml"
+        if fallback.parent.is_dir():
+            return fallback, ""
+        return None, (
+            "ยังไม่เคยได้รับรายชื่อโต๊ะจากปลั๊กอิน และไม่พบโฟลเดอร์ "
+            f"{fallback.parent} — เริ่ม session ของ Hermes สักครั้งก่อน"
+        )
+
+    def _desks_payload(self) -> dict:
+        snapshot = self.app.office.snapshot()
+        target, problem = self._roster_target()
+
+        announced = self.app.office.roster_at
+        if self.app.written and self.app.written_at > announced:
+            office_name = self.app.written["office_name"]
+            gateway = self.app.written["gateway_base_url"]
+            desks = [dict(d) for d in self.app.written["desks"]]
+            known_at = self.app.written_at
+        else:
+            office_name = snapshot["office"]["name"]
+            gateway = snapshot["office"]["gateway_base_url"]
+            desks = [
+                {
+                    "id": d["id"], "label": d["label"], "model": d["model"],
+                    "origin": d["origin"], "provider": d.get("provider", ""),
+                    "note": d.get("note", ""), "role": d.get("role", "leaf"),
+                    "toolsets": list(d.get("toolsets") or []),
+                }
+                for d in snapshot["desks"]
+            ]
+            known_at = announced
+
+        # Somebody may have edited the file by hand. We cannot read YAML here, so
+        # say so rather than quietly overwriting their work on the next save.
+        stale = ""
+        try:
+            if target and target.exists() and target.stat().st_mtime > known_at + 2:
+                stale = (
+                    f"ไฟล์ {target} ถูกแก้จากที่อื่นหลังจากรายชื่อชุดนี้ — "
+                    "เริ่ม session ของ Hermes สักครั้งให้มันประกาศรายชื่อใหม่ก่อนกดบันทึก "
+                    "ไม่อย่างนั้นการบันทึกจะทับของที่แก้ไว้"
+                )
+        except OSError:
+            pass
+
+        return {
+            "office": {"name": office_name},
+            "gateway": {"base_url": gateway},
+            "desks": desks,
+            "stale": stale,
+            "known_models": sorted(
+                name for name in snapshot["by_model"] if name and name != "unknown"
+            ),
+            "path": str(target) if target else "",
+            "writable": target is not None,
+            "problem": problem,
+        }
 
     def _static(self, name: str) -> None:
         """Serve one file from web/, subdirectories included.

@@ -26,7 +26,7 @@ import threading
 import time
 from typing import Any, Optional
 
-from .desks import Roster, load_roster
+from .desks import Roster, desks_path, load_roster
 from .sink import Sink
 
 logger = logging.getLogger(__name__)
@@ -37,6 +37,8 @@ DEFAULT_WAIT_SECONDS = 600.0
 _SINK = Sink()
 _ROSTER: Optional[Roster] = None
 _ROSTER_LOCK = threading.Lock()
+_ROSTER_STAMP: Optional[tuple] = None
+_TOOL_SIGNATURE: Optional[tuple] = None
 _HANDLES: dict[str, Any] = {}
 _HANDLES_LOCK = threading.Lock()
 _CTX: Any = None
@@ -47,19 +49,75 @@ _CTX: Any = None
 # ---------------------------------------------------------------------------
 
 
+def _roster_stamp() -> Optional[tuple]:
+    """Cheap change detector for the roster file — mtime and size."""
+    try:
+        stat = desks_path().stat()
+        return (stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        return None
+
+
 def _roster(refresh: bool = False) -> Roster:
-    global _ROSTER
+    """The desk roster, re-read whenever the file on disk has changed.
+
+    Editing desks has to take effect in a running Hermes, not only after a
+    restart — the desk editor writes the file and the next turn must see it.
+    """
+    global _ROSTER, _ROSTER_STAMP
     with _ROSTER_LOCK:
-        if _ROSTER is None or refresh:
+        stamp = _roster_stamp()
+        if _ROSTER is None or refresh or stamp != _ROSTER_STAMP:
             _ROSTER = load_roster()
+            _ROSTER_STAMP = stamp
             for problem in _ROSTER.problems:
                 logger.warning("visual_office roster: %s", problem)
         return _ROSTER
 
 
+def _sync_tool(roster: Roster) -> None:
+    """Rebuild the tool schema when the desks change.
+
+    The desk list is an enum in the schema, so a desk added while Hermes is
+    running is invisible to the model until the tool is registered again. The
+    signature check keeps this a no-op on the overwhelming majority of calls.
+    """
+    global _TOOL_SIGNATURE
+    if _CTX is None:
+        return
+    signature = tuple(
+        (d.id, d.label, d.model, d.origin, d.note, d.role, d.toolsets)
+        for d in roster.desks
+    )
+    if signature == _TOOL_SIGNATURE:
+        return
+    try:
+        _CTX.register_tool(
+            name="office_delegate",
+            toolset="delegation",
+            schema=_build_schema(roster),
+            handler=handle_office_delegate,
+            description="Delegate to a desk pinned to its own model.",
+            emoji="🪑",
+        )
+    except Exception as exc:
+        logger.warning("visual_office could not refresh office_delegate: %s", exc)
+        return
+    _TOOL_SIGNATURE = signature
+    # Tell the office too, so its editor is looking at the same list Hermes is.
+    _SINK.emit({"event": "roster", "at": time.time(), "roster": roster.to_dict()})
+    logger.info("visual_office: desk roster changed — %d desk(s)", len(roster.desks))
+
+
+def _refresh() -> Roster:
+    roster = _roster()
+    _sync_tool(roster)
+    return roster
+
+
 def _announce_roster() -> None:
     """Tell the office which desks exist. The server owns no roster of its own."""
-    roster = _roster()
+    roster = _refresh()
     _SINK.emit({"event": "roster", "at": time.time(), "roster": roster.to_dict()})
 
 
@@ -107,6 +165,10 @@ def on_session_reset(**kw: Any) -> None:
 
 def on_pre_llm_call(**kw: Any) -> None:
     # Directive hook — MUST return None so nothing is injected or blocked.
+    # Also the cheapest reliable point to notice an edited desk roster: tool
+    # definitions are rebuilt per call, so a desk added a second ago is usable
+    # on the very next message rather than after a restart.
+    _refresh()
     _emit(
         "thinking",
         session_id=kw.get("session_id"),
@@ -216,7 +278,7 @@ def _fail(message: str, **extra: Any) -> str:
 
 
 def _handle_spawn(params: dict) -> str:
-    roster = _roster()
+    roster = _refresh()
     desk_id = str(params.get("desk") or "").strip()
     goal = str(params.get("goal") or "").strip()
 
@@ -356,7 +418,7 @@ def _handle_status(params: dict) -> str:
 
 
 def _handle_list(_params: dict) -> str:
-    roster = _roster()
+    roster = _refresh()
     with _HANDLES_LOCK:
         handles = list(_HANDLES.values())
     running = []
@@ -521,19 +583,11 @@ def register(ctx) -> None:
     ctx.register_hook("subagent_start", on_subagent_start)
     ctx.register_hook("subagent_stop", on_subagent_stop)
 
-    roster = _roster(refresh=True)
     # The tool lives in the `delegation` toolset on purpose: it *is* delegation,
     # and that toolset is already enabled wherever delegate_task is, so enabling
     # this plugin does not also require editing platform_toolsets.
-    ctx.register_tool(
-        name="office_delegate",
-        toolset="delegation",
-        schema=_build_schema(roster),
-        handler=handle_office_delegate,
-        description="Delegate to a desk pinned to its own model.",
-        emoji="🪑",
-    )
-
+    roster = _roster(refresh=True)
+    _sync_tool(roster)
     _announce_roster()
     logger.info(
         "visual_office ready — %d desk(s) from %s", len(roster.desks), roster.source

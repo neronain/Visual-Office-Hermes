@@ -38,7 +38,7 @@
 
 <aside class="panel">
   <section>
-    <h2>โต๊ะและโมเดล</h2>
+    <h2>โต๊ะและโมเดล <button type="button" id="open-editor" class="h2-action">จัดการ</button></h2>
     <ul class="desks" id="desks"><li class="muted">ยังไม่ได้รับรายชื่อโต๊ะจากปลั๊กอิน</li></ul>
   </section>
   <section>
@@ -55,6 +55,40 @@
   <span id="roster-source"></span>
   <span id="uptime"></span>
 </footer>
+
+<dialog id="editor" aria-labelledby="editor-title">
+  <form method="dialog" id="editor-form">
+    <header class="ed-head">
+      <h3 id="editor-title">จัดการโต๊ะ</h3>
+      <p class="ed-path" id="editor-path"></p>
+    </header>
+
+    <div class="ed-body">
+      <div class="ed-grid ed-office">
+        <label>ชื่อห้อง<input type="text" id="ed-office-name" maxlength="64" autocomplete="off"></label>
+        <label>Gateway base URL<input type="text" id="ed-gateway" maxlength="200" autocomplete="off"
+               placeholder="http://10.0.0.5:8080/v1"></label>
+      </div>
+
+      <div id="ed-desks"></div>
+      <button type="button" id="ed-add" class="ed-add">+ เพิ่มโต๊ะ</button>
+
+      <p class="ed-hint">
+        <b>id</b> คือชื่อที่พิมพ์สั่งงาน (a-z 0-9 _ -) · <b>model</b> ต้องเป็นชื่อที่ gateway เรียกได้จริง ·
+        <b>toolsets</b> คั่นด้วยจุลภาค และต้องไม่กว้างกว่าที่ตัวแม่เปิดอยู่
+      </p>
+    </div>
+
+    <footer class="ed-foot">
+      <p class="ed-msg" id="editor-msg"></p>
+      <span class="ed-spacer"></span>
+      <button type="button" id="ed-cancel">ยกเลิก</button>
+      <button type="button" id="ed-save" class="primary">บันทึก</button>
+    </footer>
+  </form>
+</dialog>
+
+<datalist id="model-options"></datalist>
 
 <script src="office.js"></script>
 </body>

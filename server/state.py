@@ -99,6 +99,7 @@ class Office:
         self.gateway_base_url = ""
         self.roster_source = ""
         self.roster_problems: list[str] = []
+        self.roster_at = 0.0
         self.desks: dict[str, dict[str, Any]] = {}
         self.desk_order: list[str] = []
         self.workers: dict[str, dict[str, Any]] = {}
@@ -190,7 +191,7 @@ class Office:
         self.seq += 1
 
         if kind == "roster":
-            self._apply_roster(event.get("roster") or {})
+            self._apply_roster(event.get("roster") or {}, now)
             return
 
         if kind == "desk_assign":
@@ -307,7 +308,11 @@ class Office:
                 row["tokens_in"] += tokens_in
                 row["tokens_out"] += tokens_out
 
-    def _apply_roster(self, roster: dict[str, Any]) -> None:
+    def _apply_roster(self, roster: dict[str, Any], announced_at: float) -> None:
+        # The event's own timestamp, not wall-clock: replaying the log on start
+        # must not make an old announcement look like it just happened, or the
+        # editor stops noticing that the file has moved on without it.
+        self.roster_at = announced_at
         self.office_name = str(roster.get("office_name") or self.office_name)
         self.gateway_base_url = str(roster.get("gateway_base_url") or self.gateway_base_url)
         self.roster_source = str(roster.get("source") or self.roster_source)
@@ -333,6 +338,7 @@ class Office:
                     "origin": str(raw.get("origin") or "unknown"),
                     "provider": str(raw.get("provider") or ""),
                     "note": str(raw.get("note") or ""),
+                    "role": str(raw.get("role") or "leaf"),
                     "toolsets": list(raw.get("toolsets") or []),
                 }
             )

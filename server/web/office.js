@@ -1063,6 +1063,233 @@ function renderPanel(snap) {
     `uptime ${Math.floor(up / 3600)}h ${Math.floor((up % 3600) / 60)}m · seq ${snap.seq}`;
 }
 
+
+/* ------------------------------------------------------------------ desk editor */
+
+/* Editing desks has to reach Hermes, not just this page. The server writes
+ * desks.yaml; the plugin notices the file changed and re-registers the tool, so
+ * a desk added here is callable on the next message without a restart.
+ *
+ * Reads are open, writes need the office token — the same rule the event API
+ * uses. A viewer on this machine is handed the token; anyone else has to have
+ * been told it, and is asked once. */
+
+const TOKEN_KEY = 'visual-office.token';
+let officeToken = null;
+let editorState = null;
+
+function loadToken() {
+  try { return localStorage.getItem(TOKEN_KEY) || null; } catch (err) { return null; }
+}
+
+function saveToken(value) {
+  officeToken = value;
+  try { localStorage.setItem(TOKEN_KEY, value); } catch (err) { /* fine */ }
+}
+
+async function ensureToken() {
+  if (officeToken) return officeToken;
+  const stored = loadToken();
+  if (stored) { officeToken = stored; return officeToken; }
+  try {
+    const res = await fetch('/api/token');
+    if (res.ok) {
+      const body = await res.json();
+      if (body.token) { saveToken(body.token); return officeToken; }
+    }
+  } catch (err) { /* fall through to asking */ }
+  const typed = window.prompt(
+    'ใส่ token ของห้อง (เซิร์ฟเวอร์พิมพ์ตอนเริ่ม หรือดูใน ~/.hermes/visual-office/server.json)'
+  );
+  if (typed && typed.trim()) { saveToken(typed.trim()); return officeToken; }
+  return null;
+}
+
+const ORIGIN_LABEL = { local: 'เครื่องเรา', cloud: 'คลาวด์', unknown: 'ไม่ระบุ' };
+
+function deskRow(desk) {
+  const row = document.createElement('div');
+  row.className = `ed-desk ${desk.origin || 'unknown'}`;
+
+  const field = (label, key, opts = {}) => {
+    const wrap = document.createElement('label');
+    if (opts.wide) wrap.className = 'wide';
+    wrap.append(label);
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = desk[key] || '';
+    input.maxLength = opts.max || 200;
+    input.autocomplete = 'off';
+    if (opts.placeholder) input.placeholder = opts.placeholder;
+    if (opts.list) input.setAttribute('list', opts.list);
+    input.addEventListener('input', () => { desk[key] = input.value; });
+    wrap.append(input);
+    row.append(wrap);
+    return input;
+  };
+
+  field('id', 'id', { max: 32, placeholder: 'coder' });
+  field('ชื่อที่คนอ่าน', 'label', { max: 64, placeholder: 'ช่างโค้ด' });
+
+  const originWrap = document.createElement('label');
+  originWrap.append('มาจาก');
+  const origin = document.createElement('select');
+  ['local', 'cloud', 'unknown'].forEach((value) => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = ORIGIN_LABEL[value];
+    if ((desk.origin || 'unknown') === value) option.selected = true;
+    origin.append(option);
+  });
+  origin.addEventListener('change', () => {
+    desk.origin = origin.value;
+    row.className = `ed-desk ${origin.value}`;
+  });
+  originWrap.append(origin);
+  row.append(originWrap);
+
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'ed-del';
+  del.title = 'ลบโต๊ะนี้';
+  del.textContent = '\u00d7';
+  del.addEventListener('click', () => {
+    editorState.desks = editorState.desks.filter((d) => d !== desk);
+    renderEditorDesks();
+  });
+  row.append(del);
+
+  field('model (alias ที่ gateway เรียกได้)', 'model', {
+    wide: true, list: 'model-options', placeholder: 'claude-sonnet-4.8',
+  });
+  field('toolsets (คั่นด้วย , )', 'toolsets', {
+    wide: true, placeholder: 'file, terminal, web',
+  });
+  field('หมายเหตุ', 'note', { wide: true, max: 200, placeholder: 'โมเดลโค้ด 80B' });
+
+  return row;
+}
+
+function renderEditorDesks() {
+  const host = document.getElementById('ed-desks');
+  host.innerHTML = '';
+  editorState.desks.forEach((desk) => host.append(deskRow(desk)));
+}
+
+function setEditorMessage(text, ok) {
+  const el = document.getElementById('editor-msg');
+  el.textContent = text || '';
+  el.classList.toggle('ok', !!ok);
+}
+
+async function openEditor() {
+  const dialog = document.getElementById('editor');
+  setEditorMessage('');
+  let data;
+  try {
+    data = await (await fetch('/api/desks')).json();
+  } catch (err) {
+    setEditorMessage('อ่านรายชื่อโต๊ะไม่ได้');
+    return;
+  }
+
+  editorState = {
+    office: data.office.name || '',
+    gateway: data.gateway.base_url || '',
+    writable: data.writable,
+    desks: data.desks.map((d) => ({
+      id: d.id, label: d.label, model: d.model,
+      origin: d.origin || 'unknown', provider: d.provider || '',
+      note: d.note || '', role: d.role || 'leaf',
+      toolsets: (d.toolsets || []).join(', '),
+    })),
+  };
+
+  document.getElementById('ed-office-name').value = editorState.office;
+  document.getElementById('ed-gateway').value = editorState.gateway;
+
+  const options = document.getElementById('model-options');
+  options.innerHTML = '';
+  const models = new Set([...(data.known_models || []), ...data.desks.map((d) => d.model)]);
+  models.forEach((name) => {
+    if (!name) return;
+    const option = document.createElement('option');
+    option.value = name;
+    options.append(option);
+  });
+
+  const path = document.getElementById('editor-path');
+  path.textContent = data.writable ? data.path : data.problem;
+  path.classList.toggle('bad', !data.writable);
+  if (data.stale) setEditorMessage(data.stale);
+  document.getElementById('ed-save').disabled = !data.writable;
+  document.getElementById('ed-add').disabled = !data.writable;
+
+  renderEditorDesks();
+  dialog.showModal();
+}
+
+async function saveEditor() {
+  const save = document.getElementById('ed-save');
+  const token = await ensureToken();
+  if (!token) { setEditorMessage('ต้องมี token ถึงจะบันทึกได้'); return; }
+
+  save.disabled = true;
+  setEditorMessage('กำลังบันทึก…');
+
+  const payload = {
+    office: { name: document.getElementById('ed-office-name').value },
+    gateway: { base_url: document.getElementById('ed-gateway').value },
+    desks: editorState.desks.map((d) => ({
+      id: d.id, label: d.label, model: d.model, origin: d.origin,
+      provider: d.provider, note: d.note, role: d.role,
+      toolsets: d.toolsets,
+    })),
+  };
+
+  let body;
+  try {
+    const res = await fetch('/api/desks', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(payload),
+    });
+    body = await res.json();
+    if (!res.ok) {
+      if (res.status === 401) {
+        officeToken = null;
+        try { localStorage.removeItem(TOKEN_KEY); } catch (err) { /* fine */ }
+      }
+      setEditorMessage(body.error || `บันทึกไม่สำเร็จ (${res.status})`);
+      save.disabled = false;
+      return;
+    }
+  } catch (err) {
+    setEditorMessage('ต่อเซิร์ฟเวอร์ไม่ได้');
+    save.disabled = false;
+    return;
+  }
+
+  setEditorMessage(`บันทึกแล้ว ${body.desks} โต๊ะ — ${body.note}`, true);
+  save.disabled = false;
+  setTimeout(() => document.getElementById('editor').close(), 1600);
+}
+
+function wireEditor() {
+  const dialog = document.getElementById('editor');
+  if (!dialog) return;
+  document.getElementById('open-editor').addEventListener('click', openEditor);
+  document.getElementById('ed-cancel').addEventListener('click', () => dialog.close());
+  document.getElementById('ed-save').addEventListener('click', saveEditor);
+  document.getElementById('ed-add').addEventListener('click', () => {
+    editorState.desks.push({
+      id: '', label: '', model: '', origin: 'local',
+      provider: '', note: '', role: 'leaf', toolsets: '',
+    });
+    renderEditorDesks();
+  });
+}
+
 /* ------------------------------------------------------------------ feed */
 
 function setLink(state, title) {
@@ -1104,6 +1331,7 @@ function connect() {
 
 wireZoom();
 wirePlates();
+wireEditor();
 loadArt().then(() => {
   fetch('/api/state').then((r) => r.json()).then(apply).catch(() => {});
   connect();

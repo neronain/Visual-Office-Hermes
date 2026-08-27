@@ -288,3 +288,147 @@ body {
   }
   .panel { border-left: none; border-top: 1px solid var(--line); }
 }
+
+/* ---------- desk editor ---------- */
+
+.h2-action {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-2);
+  font-family: var(--font);
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+  padding: 2px 9px;
+  margin-left: 8px;
+  cursor: pointer;
+  vertical-align: 1px;
+}
+.h2-action:hover { background: var(--panel-2); color: var(--ink); border-color: var(--lamp); }
+.h2-action:focus-visible { outline: 2px solid var(--lamp); outline-offset: 1px; }
+
+#editor {
+  width: min(760px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  padding: 0;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink-2);
+  font-family: var(--font);
+}
+#editor::backdrop { background: rgba(8, 6, 12, .72); }
+#editor form { display: flex; flex-direction: column; max-height: calc(100vh - 48px); }
+
+.ed-head { padding: 18px 22px 12px; border-bottom: 1px solid var(--line); }
+.ed-head h3 { margin: 0; font-size: 17px; color: var(--ink); font-weight: 600; }
+.ed-path {
+  margin: 5px 0 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.ed-path.bad { color: var(--alert); }
+
+.ed-body { padding: 16px 22px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+
+.ed-grid { display: grid; gap: 10px; }
+.ed-office { grid-template-columns: 1fr 1fr; }
+
+#editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+#editor input,
+#editor select {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--ground);
+  border: 1px solid var(--line);
+  padding: 6px 8px;
+  min-width: 0;
+}
+#editor input:focus, #editor select:focus { outline: none; border-color: var(--lamp); }
+#editor input::placeholder { color: #55636f; }
+
+.ed-desk {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--muted);
+  background: var(--panel-2);
+  padding: 12px 14px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 130px 1fr 120px 34px;
+  align-items: end;
+}
+.ed-desk.local { border-left-color: var(--local); }
+.ed-desk.cloud { border-left-color: var(--cloud); }
+.ed-desk .wide { grid-column: 1 / -2; }
+
+.ed-del {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--alert);
+  font-size: 15px;
+  line-height: 1;
+  padding: 7px 0;
+  cursor: pointer;
+}
+.ed-del:hover { background: rgba(228, 117, 106, .12); border-color: var(--alert); }
+
+.ed-add {
+  appearance: none;
+  border: 1px dashed var(--line);
+  background: transparent;
+  color: var(--ink-2);
+  font-family: var(--font);
+  font-size: 13px;
+  padding: 9px;
+  cursor: pointer;
+}
+.ed-add:hover { border-color: var(--lamp); color: var(--ink); }
+
+.ed-hint { font-size: 12px; color: var(--muted); margin: 0; line-height: 1.7; }
+.ed-hint b { color: var(--ink-2); font-family: var(--mono); font-weight: 400; }
+
+.ed-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 22px;
+  border-top: 1px solid var(--line);
+  background: var(--panel-2);
+}
+.ed-spacer { flex: 1; }
+.ed-msg { margin: 0; font-size: 12.5px; color: var(--alert); }
+.ed-msg.ok { color: var(--local); }
+
+.ed-foot button {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-2);
+  font-family: var(--font);
+  font-size: 13px;
+  padding: 7px 16px;
+  cursor: pointer;
+}
+.ed-foot button:hover { background: var(--ground); color: var(--ink); }
+.ed-foot button.primary { border-color: var(--lamp); color: var(--lamp); }
+.ed-foot button.primary:hover { background: rgba(232, 163, 61, .12); }
+.ed-foot button:disabled { opacity: .45; cursor: default; }
+
+@media (max-width: 640px) {
+  .ed-office { grid-template-columns: 1fr; }
+  .ed-desk { grid-template-columns: 1fr 34px; }
+  .ed-desk .wide { grid-column: 1 / -1; }
+}
