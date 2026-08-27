@@ -3,7 +3,7 @@
    token counters read from across a meeting table. */
 
 :root {
-  --ground:  #0b1016;
+  --ground:  #141019;
   --panel:   #121a23;
   --panel-2: #182231;
   --line:    #22303f;
@@ -111,16 +111,27 @@ body {
   min-height: 0;
 }
 
-#office { display: block; width: 100%; height: 100%; }
+#office {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
 
 .empty {
   position: absolute;
-  inset: auto 0 44% 0;
-  text-align: center;
-  color: var(--muted);
-  font-size: 14px;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
   margin: 0;
-  padding: 0 24px;
+  padding: 7px 16px;
+  max-width: calc(100% - 32px);
+  text-align: center;
+  color: var(--ink-2);
+  background: rgba(20, 16, 25, .82);
+  border: 1px solid var(--line);
+  font-size: 13px;
   pointer-events: none;
 }
 .empty[hidden] { display: none; }

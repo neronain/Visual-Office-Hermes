@@ -15,7 +15,7 @@
 version: 1
 
 office:
-  name: ห้องทำงาน EduLLM
+  name: Visual Office
 
 gateway:
   # เขียนไว้ให้คนอ่านและให้หน้าเว็บแสดง — ตัวที่ใช้จริงคือ model.base_url ใน
