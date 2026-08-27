@@ -148,7 +148,10 @@ body {
 .zoom button:focus-visible { outline: 2px solid var(--lamp); outline-offset: -2px; }
 .zoom button:disabled { color: #4a5663; cursor: default; background: transparent; }
 
-.zoom #zoom-fit { font-family: var(--font); font-size: 12px; }
+.zoom #zoom-fit,
+.zoom .sep { font-family: var(--font); font-size: 12px; }
+.zoom .sep { border-left: 1px solid var(--line); color: var(--muted); }
+.zoom .sep[aria-pressed="true"] { color: var(--lamp); }
 
 .zoom #zoom-level {
   display: flex;

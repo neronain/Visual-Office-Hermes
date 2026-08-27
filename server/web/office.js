@@ -715,7 +715,9 @@ function drawLabels(workers) {
   ctx.textBaseline = 'top';
   ctx.textAlign = 'center';
 
-  plan.cells.forEach((cell) => {
+  // Desk nameplates are off by default: they cover a lot of floor, and the
+  // panel already names every desk with its model and its token count.
+  if (showPlates) plan.cells.forEach((cell) => {
     const tint = ORIGIN_COLOR[cell.desk.origin] || ORIGIN_COLOR.unknown;
     const cx = px((cell.col + 1.5) * TILE);
     const top = py((cell.benchRow + 1) * TILE + 6);
@@ -912,6 +914,8 @@ function tick(stamp) {
 /* ------------------------------------------------------------------ zoom ui */
 
 const ZOOM_KEY = 'visual-office.zoom';
+const PLATES_KEY = 'visual-office.plates';
+let showPlates = false;
 
 function loadZoom() {
   try {
@@ -945,6 +949,24 @@ function syncZoomUi(pannable) {
   if (out) out.disabled = view.s <= 1;
   if (inc) inc.disabled = view.s >= MAX_ZOOM;
   canvas.classList.toggle('grabbable', pannable && !canvas.classList.contains('grabbing'));
+}
+
+function wirePlates() {
+  const button = document.getElementById('toggle-plates');
+  if (!button) return;
+  try {
+    showPlates = localStorage.getItem(PLATES_KEY) === '1';
+  } catch (err) { /* blocked storage — the default stands */ }
+  const paint = () => {
+    button.setAttribute('aria-pressed', showPlates ? 'true' : 'false');
+    button.title = showPlates ? 'ซ่อนป้ายชื่อโต๊ะ' : 'แสดงป้ายชื่อโต๊ะ';
+  };
+  button.addEventListener('click', () => {
+    showPlates = !showPlates;
+    try { localStorage.setItem(PLATES_KEY, showPlates ? '1' : '0'); } catch (err) { /* fine */ }
+    paint();
+  });
+  paint();
 }
 
 function wireZoom() {
@@ -1081,6 +1103,7 @@ function connect() {
 }
 
 wireZoom();
+wirePlates();
 loadArt().then(() => {
   fetch('/api/state').then((r) => r.json()).then(apply).catch(() => {});
   connect();
