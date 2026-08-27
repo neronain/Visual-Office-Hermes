@@ -1354,7 +1354,11 @@ function deskRow(desk) {
   const field = (label, key, opts = {}) => {
     const wrap = document.createElement('label');
     if (opts.wide) wrap.className = 'wide';
-    wrap.append(label);
+    // ข้อความป้ายอยู่ใน span ไม่ใช่ text node เปล่า ๆ เพราะบางช่องต้องเปลี่ยนคำอธิบาย
+    // ตามโหมดที่เลือก — input.previousElementSibling คือ span ตัวนั้น
+    const caption = document.createElement('span');
+    caption.textContent = label;
+    wrap.append(caption);
     const input = document.createElement('input');
     input.type = 'text';
     input.value = desk[key] || '';
@@ -1453,10 +1457,30 @@ function deskRow(desk) {
     // toolsets ไม่มีผลกับโต๊ะที่ยิงตรง — บอกไว้ดีกว่าปล่อยให้กรอกแล้วงงว่าทำไมไม่ทำงาน
     toolsetsInput.disabled = direct;
     toolsetsInput.parentElement.classList.toggle('dim', direct);
+    // ช่อง model หมายถึงคนละอย่างในสองโหมด: โหมด gateway คือ alias ที่ gateway รู้จัก
+    // ส่วนโหมดยิงตรงคือชื่อที่ endpoint นั้นเสิร์ฟจริง ๆ · ป้ายเดิมบอกว่า "alias ที่
+    // gateway เรียกได้" ตลอดเวลา ซึ่งผิดครึ่งหนึ่งของเวลา
+    modelInput.previousElementSibling.textContent = direct
+      ? 'model (ชื่อที่ endpoint นี้เสิร์ฟ)'
+      : 'model (alias ที่ gateway เรียกได้)';
+    // อธิบายทั้งสองโหมดเสมอ ไม่ใช่เฉพาะตอนเลือกยิงตรง — คนที่ยังไม่รู้ว่ามีทางเลือก
+    // จะไม่มีวันไปกดดู
     hint.textContent = direct
-      ? 'โต๊ะนี้ไม่ผ่าน gateway — ถาม-ตอบอย่างเดียว ไม่มี tools ไม่มี session · คีย์เก็บใน env ไม่ลงไฟล์'
-      : '';
+      ? 'ไม่ผ่าน gateway — ถาม-ตอบอย่างเดียว ไม่มี tools ไม่มี session · แลกมาด้วยการที่ gateway ล่มแล้วโต๊ะนี้ยังทำงานได้ · คีย์เก็บใน env ไม่ลงไฟล์'
+      : 'ผ่าน gateway — เป็น subagent เต็มรูป มี tools มี session · แต่ตายพร้อม gateway · เลือกอีกแบบเพื่อให้โต๊ะนี้ชี้ endpoint ของตัวเอง';
   };
+
+  /* ลำดับที่เห็นบนจอ · "ต่อผ่าน" ต้องมาก่อน model เพราะมันเปลี่ยนความหมายของ model
+     และเปลี่ยนว่าช่องไหนโผล่บ้าง — วางไว้ท้ายแถวคือซ่อนทางเลือกไว้ใต้ของที่คนกรอกไปแล้ว
+     (append ย้ายโหนดที่อยู่ใน DOM อยู่แล้ว ไม่ได้สร้างซ้ำ) */
+  row.append(
+    viaWrap,
+    hint,
+    modelInput.parentElement,
+    caps,
+    endpoint,
+    toolsetsInput.parentElement,
+  );
 
   via.addEventListener('change', () => {
     if (via.value === 'gateway') {
