@@ -50,6 +50,9 @@ _ACTIVITY_BY_FRAGMENT: tuple[tuple[str, str], ...] = (
 
 IDLE_AFTER_SECONDS = 90.0
 GONE_AFTER_SECONDS = 40.0    # long enough to watch someone walk out, short enough to empty the room
+# A session that has said nothing for this long is presumed over. Hermes fires
+# on_session_finalize on a clean exit, but a killed process never gets to.
+SILENT_AFTER_SECONDS = 1800.0
 
 
 def activity_for_tool(tool_name: Optional[str]) -> str:
@@ -246,16 +249,28 @@ class Office:
             if event.get("duration_ms") is not None:
                 worker["last_duration"] = _num(event.get("duration_ms")) / 1000.0
 
-        elif kind in ("session_end", "session_finalize", "session_reset"):
+        elif kind == "session_end":
+            # Despite the name, Hermes fires this at the end of every *turn*:
+            # "Fired at the very end of every run_conversation call" (its own
+            # comment). Real session teardown is on_session_finalize. Treating a
+            # finished turn as a departure made the main session walk out of the
+            # room after every single reply.
+            worker["activity"] = "idle"
+            worker["tool"] = None
+            worker["needs_input"] = False
+            if event.get("failed"):
+                worker["status"] = "failed"
+            elif event.get("interrupted"):
+                worker["status"] = "interrupted"
+            else:
+                worker["status"] = "waiting"
+            if event.get("model"):
+                worker["model"] = event["model"]
+
+        elif kind in ("session_finalize", "session_reset"):
             worker["activity"] = "leaving"
+            worker["status"] = "closed"
             worker["ended_at"] = now
-            if kind == "session_end":
-                if event.get("failed"):
-                    worker["status"] = "failed"
-                elif event.get("interrupted"):
-                    worker["status"] = "interrupted"
-                else:
-                    worker["status"] = "completed"
 
         elif kind == "thinking":
             worker["activity"] = "thinking"
@@ -353,6 +368,9 @@ class Office:
             workers = []
             for worker in self.workers.values():
                 ended = worker.get("ended_at")
+                if ended is None and (now - worker["updated_at"]) > SILENT_AFTER_SECONDS:
+                    # Never finalized, never heard from — the process is gone.
+                    ended = worker["updated_at"]
                 if ended and (now - ended) > GONE_AFTER_SECONDS:
                     continue
                 view = dict(worker)
