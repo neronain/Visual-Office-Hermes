@@ -1296,6 +1296,38 @@ async function ensureToken() {
 
 const ORIGIN_LABEL = { local: 'เครื่องเรา', cloud: 'คลาวด์', unknown: 'ไม่ระบุ' };
 
+/* The gateway holds one entry per model — its own endpoint, its own measured
+   capabilities. The editor shows that entry so the desks read as the different
+   machines they are, instead of three names behind one URL. */
+let modelInfo = new Map();
+
+function capsLine(id) {
+  const info = modelInfo.get(id);
+  if (!id) return { text: 'ยังไม่ได้เลือกโมเดล', bad: false };
+  if (!info) {
+    return {
+      text: modelInfo.size
+        ? `gateway ไม่มี ${id} ให้คีย์นี้เรียก — งานที่ส่งไปจะล้มตอนเรียก`
+        : 'ยังไม่ได้รับรายการโมเดลจาก gateway',
+      bad: modelInfo.size > 0,
+    };
+  }
+  const c = info.capabilities || {};
+  const badges = [];
+  if (info.context_window) badges.push(`${Math.round(info.context_window / 1024)}K ctx`);
+  if (c.vision) badges.push('รูป');
+  if (c.tools) badges.push('tools');
+  if (c.reasoning) badges.push('คิดเป็นขั้นตอน');
+  if (c.coding) badges.push('โค้ด');
+  return { text: `${info.display_name} · ${badges.join(' · ')}`, bad: false };
+}
+
+function paintCaps(el, id) {
+  const { text, bad } = capsLine(id);
+  el.textContent = text;
+  el.classList.toggle('bad', bad);
+}
+
 function deskRow(desk) {
   const row = document.createElement('div');
   row.className = `ed-desk ${desk.origin || 'unknown'}`;
@@ -1348,9 +1380,14 @@ function deskRow(desk) {
   });
   row.append(del);
 
-  field('model (alias ที่ gateway เรียกได้)', 'model', {
+  const modelInput = field('model (alias ที่ gateway เรียกได้)', 'model', {
     wide: true, list: 'model-options', placeholder: 'claude-sonnet-4.8',
   });
+  const caps = document.createElement('p');
+  caps.className = 'ed-caps';
+  paintCaps(caps, desk.model);
+  modelInput.addEventListener('input', () => paintCaps(caps, modelInput.value.trim()));
+  row.append(caps);
   field('toolsets (คั่นด้วย , )', 'toolsets', {
     wide: true, placeholder: 'file, terminal, web',
   });
@@ -1413,9 +1450,25 @@ async function openEditor() {
   document.getElementById('ed-office-name').value = editorState.office;
   document.getElementById('ed-gateway').value = editorState.gateway;
 
+  modelInfo = new Map((data.available_models || []).map((m) => [m.id, m]));
+
+  const mainInput = document.getElementById('ed-main-model');
+  const mainCaps = document.getElementById('ed-main-caps');
+  editorState.mainModel = data.main_model || data.agent_model || '';
+  mainInput.value = editorState.mainModel;
+  paintCaps(mainCaps, mainInput.value.trim());
+  mainInput.oninput = () => {
+    editorState.mainModel = mainInput.value;
+    paintCaps(mainCaps, mainInput.value.trim());
+  };
+
   const options = document.getElementById('model-options');
   options.innerHTML = '';
-  const models = new Set([...(data.known_models || []), ...data.desks.map((d) => d.model)]);
+  const models = new Set([
+    ...(data.available_models || []).map((m) => m.id),
+    ...(data.known_models || []),
+    ...data.desks.map((d) => d.model),
+  ]);
   models.forEach((name) => {
     if (!name) return;
     const option = document.createElement('option');
@@ -1443,7 +1496,10 @@ async function saveEditor() {
   setEditorMessage('กำลังบันทึก…');
 
   const payload = {
-    office: { name: document.getElementById('ed-office-name').value },
+    office: {
+      name: document.getElementById('ed-office-name').value,
+      main_model: document.getElementById('ed-main-model').value,
+    },
     gateway: { base_url: document.getElementById('ed-gateway').value },
     desks: editorState.desks.map((d) => ({
       id: d.id, label: d.label, model: d.model, origin: d.origin,
@@ -1592,6 +1648,52 @@ function wireSay() {
   });
   refreshSayLog();
   setInterval(refreshSayLog, 4000);
+  refreshSaid();
+  setInterval(refreshSaid, 3000);
+}
+
+/* ------------------------------------------------------------------ replies */
+
+/* Commanding without seeing the answer means keeping the chat app open beside
+ * this one, which defeats the point of a screen that says what is going on.
+ * The plugin forwards the assistant's own words and any approval it is waiting
+ * on; the server holds them in memory only, so nothing lands on disk. */
+
+const SAID_KIND = { reply: '', approval: 'approval', verdict: 'verdict' };
+
+function clockOf(seconds) {
+  const d = new Date(seconds * 1000);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function renderSaid(rows) {
+  const host = document.getElementById('said');
+  if (!host) return;
+  if (!rows.length) {
+    host.innerHTML = '<li class="muted">ยังไม่มีคำตอบ</li>';
+    return;
+  }
+  host.innerHTML = rows.map((row) => {
+    const who = row.desk_label ? `โต๊ะ ${esc(row.desk_label)}` : esc(row.platform || 'session');
+    const cls = SAID_KIND[row.kind] || '';
+    const head = row.kind === 'approval' ? 'รออนุมัติ' : row.kind === 'verdict' ? 'ผลอนุมัติ' : '';
+    const ask = row.kind === 'approval' && row.command
+      ? `<span class="ask">${esc(row.command)}</span>` : '';
+    const more = row.truncated ? ' <span class="more">…ตัดท้าย</span>' : '';
+    return `<li class="${cls}">`
+      + `<div class="meta"><span class="who">${who}</span>`
+      + `<span>${esc(clockOf(row.at))}</span>`
+      + (head ? `<span>${head}</span>` : '')
+      + `</div>`
+      + `<div class="text">${esc(row.text)}${more}</div>${ask}</li>`;
+  }).join('');
+}
+
+async function refreshSaid() {
+  try {
+    const body = await (await fetch('/api/said')).json();
+    renderSaid(body.said || []);
+  } catch (err) { /* the panel is a convenience, not a source of truth */ }
 }
 
 /* ------------------------------------------------------------------ feed */

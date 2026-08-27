@@ -26,6 +26,7 @@ import threading
 import time
 from typing import Any, Optional
 
+from . import gateway as gw
 from .desks import Roster, desks_path, load_roster
 from .sink import Sink
 
@@ -123,10 +124,28 @@ def _refresh() -> Roster:
     return roster
 
 
+def _apply_main_model(roster: Roster) -> None:
+    """Follow the roster's choice of main model into Hermes' own config.
+
+    The desk file is where a person decides which model does what; the main
+    agent's model is the same kind of decision, so it belongs beside the desks
+    rather than in a second file they have to remember.
+    """
+    if not roster.main_model:
+        return
+    changed, message = gw.set_agent_model(roster.main_model)
+    if message and not changed:
+        logger.warning("visual_office main model: %s", message)
+
+
 def _announce_roster() -> None:
-    """Tell the office which desks exist. The server owns no roster of its own."""
+    """Tell the office which desks exist, and what the gateway says they can do."""
     roster = _refresh()
-    _SINK.emit({"event": "roster", "at": time.time(), "roster": roster.to_dict()})
+    _apply_main_model(roster)
+    payload = roster.to_dict()
+    payload["available_models"] = gw.catalog()
+    payload["agent_model"] = gw.agent_model()[0]
+    _SINK.emit({"event": "roster", "at": time.time(), "roster": payload})
 
 
 # ---------------------------------------------------------------------------
@@ -216,9 +235,46 @@ def on_post_tool_call(**kw: Any) -> None:
     )
 
 
+REPLY_MAX_CHARS = 4000
+
+
+def _assistant_text(message: Any) -> str:
+    """The assistant's own words, if this call produced any."""
+    content = getattr(message, "content", None)
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        # Some providers hand back content blocks rather than a plain string.
+        parts = []
+        for block in content:
+            text = getattr(block, "text", None)
+            if text is None and isinstance(block, dict):
+                text = block.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+        return "\n".join(parts).strip()
+    return ""
+
+
 def on_post_api_request(**kw: Any) -> None:
     """The model dimension. This is the hook the whole project exists for."""
     usage = kw.get("usage")
+
+    # The reply itself, so the office can show what came back instead of
+    # sending the reader to the chat app. Most calls in an agent loop return
+    # tool calls and no prose — those are not worth showing.
+    text = _assistant_text(kw.get("assistant_message"))
+    if text:
+        _emit(
+            "reply",
+            session_id=kw.get("session_id"),
+            platform=kw.get("platform"),
+            model=kw.get("model"),
+            text=text[:REPLY_MAX_CHARS],
+            truncated=len(text) > REPLY_MAX_CHARS,
+            tool_calls=kw.get("assistant_tool_call_count"),
+        )
+
     _emit(
         "api_request",
         session_id=kw.get("session_id"),
@@ -237,12 +293,23 @@ def on_post_api_request(**kw: Any) -> None:
 
 
 def on_pre_approval_request(**kw: Any) -> None:
-    # Approval hooks carry session_key, not session_id.
-    _emit("approval_wait", session_id=kw.get("session_key") or kw.get("session_id"))
+    # Approval hooks carry session_key, not session_id. The command and its
+    # description arrive already redacted by Hermes (redact_sensitive_text with
+    # force=True), so they are safe to put on a screen.
+    _emit(
+        "approval_wait",
+        session_id=kw.get("session_key") or kw.get("session_id"),
+        command=str(kw.get("command") or "")[:400] or None,
+        description=str(kw.get("description") or "")[:400] or None,
+    )
 
 
 def on_post_approval_response(**kw: Any) -> None:
-    _emit("approval_done", session_id=kw.get("session_key") or kw.get("session_id"))
+    _emit(
+        "approval_done",
+        session_id=kw.get("session_key") or kw.get("session_id"),
+        verdict=str(kw.get("verdict") or "") or None,
+    )
 
 
 def on_subagent_start(**kw: Any) -> None:

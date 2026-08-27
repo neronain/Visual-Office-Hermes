@@ -49,6 +49,9 @@ class Roster:
     desks: tuple[Desk, ...]
     source: str
     problems: tuple[str, ...] = ()
+    # Which model the top-level agent runs on. Kept here so the office can show
+    # and change it beside the desks — it is the same kind of decision.
+    main_model: str = ""
 
     def find(self, desk_id: str) -> Optional[Desk]:
         wanted = (desk_id or "").strip().lower()
@@ -61,6 +64,7 @@ class Roster:
         return {
             "office_name": self.office_name,
             "gateway_base_url": self.gateway_base_url,
+            "main_model": self.main_model,
             "desks": [d.to_dict() for d in self.desks],
             "source": self.source,
             "problems": list(self.problems),
@@ -162,6 +166,7 @@ def load_roster() -> Roster:
     return Roster(
         office_name=str(office.get("name") or "Visual Office").strip(),
         gateway_base_url=str(gateway.get("base_url") or "").strip(),
+        main_model=str(office.get("main_model") or "").strip(),
         desks=tuple(desks),
         source=str(path),
         problems=tuple(problems),

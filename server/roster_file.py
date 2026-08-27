@@ -111,6 +111,7 @@ def normalize(payload: Any) -> dict[str, Any]:
 
     return {
         "office_name": _text(office.get("name"), "ชื่อห้อง", LIMITS["office_name"]) or "Visual Office",
+        "main_model": _text(office.get("main_model"), "โมเดลหลัก", LIMITS["model"]),
         "gateway_base_url": _text(gateway.get("base_url"), "gateway base_url", LIMITS["gateway"]),
         "desks": desks,
     }
@@ -135,6 +136,9 @@ def dump(roster: dict[str, Any], stamp: str) -> str:
         "",
         "office:",
         f"  name: {_scalar(roster['office_name'])}",
+        # Which model the top-level agent runs on. The plugin follows this into
+        # ~/.hermes/config.yaml, so both decisions live in one file.
+        f"  main_model: {_scalar(roster['main_model'])}",
         "",
         "gateway:",
         f"  base_url: {_scalar(roster['gateway_base_url'])}",

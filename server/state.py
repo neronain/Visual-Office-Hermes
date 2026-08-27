@@ -57,6 +57,11 @@ GONE_AFTER_SECONDS = 40.0    # long enough to watch someone walk out, short enou
 # on_session_finalize on a clean exit, but a killed process never gets to.
 SILENT_AFTER_SECONDS = 1800.0
 
+# What the agents actually said, kept so the office can answer "did it work?"
+# without sending the reader to the chat app. Memory only — never written to
+# events.jsonl, so a restart forgets it and nothing lands on disk.
+TRANSCRIPT_MAX = 60
+
 
 def activity_for_tool(tool_name: Optional[str]) -> str:
     name = (tool_name or "").lower()
@@ -106,6 +111,9 @@ class Office:
         self.roster_source = ""
         self.roster_problems: list[str] = []
         self.roster_at = 0.0
+        self.available_models: list[dict[str, Any]] = []
+        self.agent_model = ""
+        self.main_model = ""
         self.desks: dict[str, dict[str, Any]] = {}
         self.desk_order: list[str] = []
         self.workers: dict[str, dict[str, Any]] = {}
@@ -115,6 +123,7 @@ class Office:
         self.pending_desks: dict[str, dict[str, Any]] = {}
         # Running totals, kept apart from the worker list. A character leaves the
         # floor after a minute; what it spent should not leave with it.
+        self.transcript: list[dict[str, Any]] = []
         self.totals = {"calls": 0, "tokens_in": 0, "tokens_out": 0}
         self.by_origin: dict[str, dict[str, int]] = {}
         self.by_model: dict[str, dict[str, int]] = {}
@@ -223,6 +232,8 @@ class Office:
         if not session_id:
             return
         worker = self._worker(session_id, now)
+        if kind in ("reply", "approval_wait", "approval_done"):
+            self._remember_said(kind, event, worker, now)
         worker["updated_at"] = now
 
         # A session can come back after it was finalized: the gateway resumes an
@@ -303,6 +314,10 @@ class Office:
             worker["tool"] = None
             worker["activity"] = "working"
 
+        elif kind == "reply":
+            # Nothing about the room changes; the words were already filed above.
+            pass
+
         elif kind == "approval_wait":
             worker["needs_input"] = True
             worker["activity"] = "waiting"
@@ -334,12 +349,52 @@ class Office:
                 row["tokens_in"] += tokens_in
                 row["tokens_out"] += tokens_out
 
+    def _remember_said(
+        self, kind: str, event: dict[str, Any], worker: dict[str, Any], now: float
+    ) -> None:
+        if kind == "reply":
+            text = str(event.get("text") or "").strip()
+            if not text:
+                return
+            entry = {"kind": "reply", "text": text, "truncated": bool(event.get("truncated"))}
+        elif kind == "approval_wait":
+            command = str(event.get("command") or "").strip()
+            description = str(event.get("description") or "").strip()
+            if not command and not description:
+                return
+            entry = {"kind": "approval", "text": description or command, "command": command}
+        else:
+            verdict = str(event.get("verdict") or "").strip()
+            if not verdict:
+                return
+            entry = {"kind": "verdict", "text": verdict}
+
+        entry.update(
+            at=now,
+            session_id=worker["id"],
+            platform=worker.get("platform", ""),
+            desk=worker.get("desk"),
+            desk_label=worker.get("desk_label"),
+            model=str(event.get("model") or worker.get("model") or ""),
+        )
+        self.transcript.append(entry)
+        del self.transcript[:-TRANSCRIPT_MAX]
+
+    def said(self, limit: int = 20) -> list[dict[str, Any]]:
+        with self._lock:
+            return [dict(row) for row in self.transcript[-limit:][::-1]]
+
     def _apply_roster(self, roster: dict[str, Any], announced_at: float) -> None:
         # The event's own timestamp, not wall-clock: replaying the log on start
         # must not make an old announcement look like it just happened, or the
         # editor stops noticing that the file has moved on without it.
         self.roster_at = announced_at
         self.office_name = str(roster.get("office_name") or self.office_name)
+        models = roster.get("available_models")
+        if isinstance(models, list):
+            self.available_models = models
+        self.agent_model = str(roster.get("agent_model") or self.agent_model)
+        self.main_model = str(roster.get("main_model") or "")
         self.gateway_base_url = str(roster.get("gateway_base_url") or self.gateway_base_url)
         self.roster_source = str(roster.get("source") or self.roster_source)
         self.roster_problems = [str(p) for p in (roster.get("problems") or [])]

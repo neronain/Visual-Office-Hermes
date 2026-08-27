@@ -10,6 +10,7 @@ Routes
   POST /api/command   queue a task typed into the office page (Bearer token)
   GET  /api/command/next    the plugin pulls one queued task (Bearer token)
   GET  /api/command/log     what was sent and how it went
+  GET  /api/said            recent replies and approval questions (memory only)
   GET  /api/desks     the desk roster; PUT to rewrite it (Bearer token)
   GET  /api/state     the folded office snapshot
   GET  /api/stream    the same snapshot, pushed over SSE
@@ -295,7 +296,11 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         self.app.office.apply(event)
-        self.app.log.append(event)
+        # Replies are held in memory only. The event log is the office's state,
+        # not a chat archive — putting what people said on disk is a different
+        # promise than the one this thing makes.
+        if event.get("event") != "reply":
+            self.app.log.append(event)
         self._json(202, {"ok": True, "seq": self.app.office.seq})
 
     def do_GET(self) -> None:  # noqa: N802
@@ -311,6 +316,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(401, {"error": "bad or missing bearer token"})
                 return
             self._handle_command_next()
+        elif path == "/api/said":
+            self._json(200, {"said": self.app.office.said()})
         elif path == "/api/command/log":
             with self.app.command_lock:
                 self._json(200, {"commands": list(reversed(self.app.command_log))})
@@ -414,6 +421,13 @@ class Handler(BaseHTTPRequestHandler):
             "gateway": {"base_url": gateway},
             "desks": desks,
             "stale": stale,
+            # What the gateway says each model can do. Each model is configured
+            # separately there — one entry per model, its own endpoint and its own
+            # measured capabilities — so the editor shows that rather than making
+            # the desks look interchangeable.
+            "available_models": self.app.office.available_models,
+            "agent_model": self.app.office.agent_model,
+            "main_model": self.app.office.main_model,
             "known_models": sorted(
                 name for name in snapshot["by_model"] if name and name != "unknown"
             ),

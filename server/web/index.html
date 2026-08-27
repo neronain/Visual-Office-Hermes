@@ -69,6 +69,11 @@
     <ul class="say-log" id="say-log"></ul>
   </section>
 
+  <section class="said-wrap">
+    <h2>ตอบกลับมาว่าอะไร</h2>
+    <ul class="said" id="said"><li class="muted">ยังไม่มีคำตอบ</li></ul>
+  </section>
+
   <section id="problems-wrap" hidden>
     <h2>ปัญหาของรายชื่อโต๊ะ</h2>
     <ul class="problems" id="problems"></ul>
@@ -90,8 +95,15 @@
     <div class="ed-body">
       <div class="ed-grid ed-office">
         <label>ชื่อห้อง<input type="text" id="ed-office-name" maxlength="64" autocomplete="off"></label>
-        <label>Gateway base URL<input type="text" id="ed-gateway" maxlength="200" autocomplete="off"
-               placeholder="http://10.0.0.5:8080/v1"></label>
+        <label>Gateway base URL — ประตูเดียวที่ทุกโต๊ะเรียกผ่าน<input type="text" id="ed-gateway"
+               maxlength="200" autocomplete="off" placeholder="http://10.0.0.5:8080/v1"></label>
+      </div>
+
+      <div class="ed-main">
+        <label>โมเดลหลัก — ตัวที่เอเจนต์ตัวแม่ใช้เอง
+          <input type="text" id="ed-main-model" list="model-options" maxlength="200" autocomplete="off"
+                 placeholder="claude-sonnet-4.8"></label>
+        <p class="ed-caps" id="ed-main-caps"></p>
       </div>
 
       <div id="ed-desks"></div>
