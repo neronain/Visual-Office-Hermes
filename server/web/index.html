@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Visual Office · Hermes</title>
+<link rel="stylesheet" href="office.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23111820'/><rect x='3' y='6' width='10' height='2' fill='%23e8a33d'/><rect x='4' y='9' width='8' height='4' fill='%234fbb80'/></svg>">
+</head>
+<body>
+
+<header class="bar">
+  <div class="bar-id">
+    <span class="dot" id="link-dot" title="ยังไม่ได้เชื่อมต่อ"></span>
+    <h1 id="office-name">Visual Office</h1>
+    <span class="gw" id="gateway"></span>
+  </div>
+  <div class="bar-stats">
+    <div class="stat"><span class="k">ทำงานอยู่</span><b id="stat-active">0</b></div>
+    <div class="stat"><span class="k">เรียกโมเดล</span><b id="stat-calls">0</b></div>
+    <div class="stat"><span class="k">โทเคนเข้า</span><b id="stat-in">0</b></div>
+    <div class="stat"><span class="k">โทเคนออก</span><b id="stat-out">0</b></div>
+    <div class="stat alert" id="stat-waiting-wrap" hidden><span class="k">รออนุมัติ</span><b id="stat-waiting">0</b></div>
+  </div>
+</header>
+
+<main class="room">
+  <canvas id="office" aria-label="ห้องทำงานพิกเซล"></canvas>
+  <p class="empty" id="empty">ยังไม่มีใครในห้อง — เริ่ม session ของ Hermes แล้วตัวละครจะเดินเข้ามา</p>
+</main>
+
+<aside class="panel">
+  <section>
+    <h2>โต๊ะและโมเดล</h2>
+    <ul class="desks" id="desks"><li class="muted">ยังไม่ได้รับรายชื่อโต๊ะจากปลั๊กอิน</li></ul>
+  </section>
+  <section>
+    <h2>ใช้ไปกับโมเดลอะไร</h2>
+    <ul class="models" id="models"><li class="muted">ยังไม่มีการเรียกโมเดล</li></ul>
+  </section>
+  <section id="problems-wrap" hidden>
+    <h2>ปัญหาของรายชื่อโต๊ะ</h2>
+    <ul class="problems" id="problems"></ul>
+  </section>
+</aside>
+
+<footer class="foot">
+  <span id="roster-source"></span>
+  <span id="uptime"></span>
+</footer>
+
+<script src="office.js"></script>
+</body>
+</html>

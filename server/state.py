@@ -1,0 +1,391 @@
+"""Fold a stream of Hermes events into the state of an office.
+
+The server keeps no database. It replays an append-only event log into a single
+in-memory snapshot, which is what the UI renders and what ``/api/state``
+returns. That makes restarts cheap and makes the log the only source of truth.
+
+The one thing this model does that a plain activity feed does not: it carries
+the *model* on every worker. Hermes' ``post_api_request`` hook hands us model,
+provider and base URL on every call, so a character in the office can be labelled
+with the brain behind it and the tokens it has spent.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+from typing import Any, Iterable, Optional
+
+# Tool name -> what the character is visibly doing. Order matters: the first
+# fragment that appears in the tool name wins.
+_ACTIVITY_BY_FRAGMENT: tuple[tuple[str, str], ...] = (
+    ("write_file", "typing"),
+    ("edit", "typing"),
+    ("patch", "typing"),
+    ("apply", "typing"),
+    ("create", "typing"),
+    ("read_file", "reading"),
+    ("read", "reading"),
+    ("search", "reading"),
+    ("grep", "reading"),
+    ("glob", "reading"),
+    ("list", "reading"),
+    ("view", "reading"),
+    ("browser", "browsing"),
+    ("web", "browsing"),
+    ("fetch", "browsing"),
+    ("shell", "running"),
+    ("terminal", "running"),
+    ("bash", "running"),
+    ("exec", "running"),
+    ("code_execution", "running"),
+    ("delegate", "pointing"),
+    ("office_delegate", "pointing"),
+    ("memory", "filing"),
+    ("todo", "filing"),
+    ("kanban", "filing"),
+    ("image", "drawing"),
+    ("vision", "drawing"),
+)
+
+IDLE_AFTER_SECONDS = 90.0
+GONE_AFTER_SECONDS = 120.0   # a character who has left is off the floor in two minutes
+
+
+def activity_for_tool(tool_name: Optional[str]) -> str:
+    name = (tool_name or "").lower()
+    if not name:
+        return "working"
+    for fragment, activity in _ACTIVITY_BY_FRAGMENT:
+        if fragment in name:
+            return activity
+    return "working"
+
+
+def _num(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _tokens(usage: Any) -> tuple[int, int]:
+    """Pull (input, output) out of a usage dict in whichever dialect it arrives."""
+    if not isinstance(usage, dict):
+        return 0, 0
+    incoming = (
+        usage.get("input_tokens")
+        or usage.get("prompt_tokens")
+        or usage.get("input")
+        or 0
+    )
+    outgoing = (
+        usage.get("output_tokens")
+        or usage.get("completion_tokens")
+        or usage.get("output")
+        or 0
+    )
+    return int(_num(incoming)), int(_num(outgoing))
+
+
+class Office:
+    """Thread-safe office snapshot built by folding events."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self.seq = 0
+        self.started_at = time.time()
+        self.office_name = "Visual Office"
+        self.gateway_base_url = ""
+        self.roster_source = ""
+        self.roster_problems: list[str] = []
+        self.desks: dict[str, dict[str, Any]] = {}
+        self.desk_order: list[str] = []
+        self.workers: dict[str, dict[str, Any]] = {}
+        # subagent_id -> session_id, and the desk assignment that may arrive
+        # before or after the subagent_start hook. Both orders happen.
+        self.subagent_sessions: dict[str, str] = {}
+        self.pending_desks: dict[str, dict[str, Any]] = {}
+
+    # -- helpers ------------------------------------------------------------
+
+    def _worker(self, session_id: str, now: float) -> dict[str, Any]:
+        worker = self.workers.get(session_id)
+        if worker is None:
+            worker = {
+                "id": session_id,
+                "kind": "session",
+                "session_id": session_id,
+                "subagent_id": None,
+                "parent_session_id": None,
+                "desk": None,
+                "desk_label": None,
+                "origin": "unknown",
+                "label": session_id[:8],
+                "platform": "",
+                "model": "",
+                "provider": "",
+                "base_url": "",
+                "activity": "arriving",
+                "tool": None,
+                "goal": None,
+                "status": "running",
+                "started_at": now,
+                "updated_at": now,
+                "ended_at": None,
+                "calls": 0,
+                "tokens_in": 0,
+                "tokens_out": 0,
+                "last_duration": None,
+                "needs_input": False,
+            }
+            self.workers[session_id] = worker
+        return worker
+
+    def _apply_desk(self, worker: dict[str, Any], assignment: dict[str, Any]) -> None:
+        worker["desk"] = assignment.get("desk")
+        worker["desk_label"] = assignment.get("desk_label")
+        worker["origin"] = assignment.get("origin") or worker.get("origin") or "unknown"
+        if assignment.get("model"):
+            worker["model"] = assignment["model"]
+        if assignment.get("provider"):
+            worker["provider"] = assignment["provider"]
+        if assignment.get("goal") and not worker.get("goal"):
+            worker["goal"] = assignment["goal"]
+        if assignment.get("desk_label"):
+            worker["label"] = assignment["desk_label"]
+
+    def _desk_totals(self, desk_id: Optional[str], tokens_in: int, tokens_out: int) -> None:
+        if not desk_id:
+            return
+        desk = self.desks.get(desk_id)
+        if desk is None:
+            return
+        desk["calls"] += 1
+        desk["tokens_in"] += tokens_in
+        desk["tokens_out"] += tokens_out
+
+    # -- fold ---------------------------------------------------------------
+
+    def apply(self, event: dict[str, Any]) -> None:
+        """Fold one event into the snapshot. Unknown events are ignored."""
+        with self._lock:
+            self._apply_locked(event)
+
+    def apply_many(self, events: Iterable[dict[str, Any]]) -> None:
+        with self._lock:
+            for event in events:
+                self._apply_locked(event)
+
+    def _apply_locked(self, event: dict[str, Any]) -> None:
+        kind = str(event.get("event") or "").strip()
+        if not kind:
+            return
+        now = _num(event.get("at")) or time.time()
+        self.seq += 1
+
+        if kind == "roster":
+            self._apply_roster(event.get("roster") or {})
+            return
+
+        if kind == "desk_assign":
+            subagent_id = str(event.get("subagent_id") or "")
+            if not subagent_id:
+                return
+            assignment = {
+                "desk": event.get("desk"),
+                "desk_label": event.get("desk_label"),
+                "origin": event.get("origin"),
+                "model": event.get("model"),
+                "provider": event.get("provider"),
+                "goal": event.get("goal"),
+            }
+            session_id = self.subagent_sessions.get(subagent_id)
+            if session_id and session_id in self.workers:
+                self._apply_desk(self.workers[session_id], assignment)
+            else:
+                self.pending_desks[subagent_id] = assignment
+            return
+
+        session_id = str(event.get("session_id") or "")
+        if not session_id:
+            return
+        worker = self._worker(session_id, now)
+        worker["updated_at"] = now
+
+        if kind == "session_start":
+            worker["platform"] = str(event.get("platform") or worker["platform"])
+            worker["activity"] = "arriving"
+            worker["status"] = "running"
+            worker["ended_at"] = None
+
+        elif kind == "subagent_start":
+            subagent_id = str(event.get("subagent_id") or "")
+            worker["kind"] = "subagent"
+            worker["subagent_id"] = subagent_id or worker["subagent_id"]
+            worker["parent_session_id"] = event.get("parent_session_id")
+            worker["goal"] = event.get("goal") or worker["goal"]
+            worker["activity"] = "arriving"
+            worker["status"] = "running"
+            if subagent_id:
+                self.subagent_sessions[subagent_id] = session_id
+                pending = self.pending_desks.pop(subagent_id, None)
+                if pending:
+                    self._apply_desk(worker, pending)
+
+        elif kind == "subagent_stop":
+            worker["status"] = str(event.get("status") or "completed")
+            worker["activity"] = "leaving"
+            worker["ended_at"] = now
+            if event.get("duration_ms") is not None:
+                worker["last_duration"] = _num(event.get("duration_ms")) / 1000.0
+
+        elif kind in ("session_end", "session_finalize", "session_reset"):
+            worker["activity"] = "leaving"
+            worker["ended_at"] = now
+            if kind == "session_end":
+                if event.get("failed"):
+                    worker["status"] = "failed"
+                elif event.get("interrupted"):
+                    worker["status"] = "interrupted"
+                else:
+                    worker["status"] = "completed"
+
+        elif kind == "thinking":
+            worker["activity"] = "thinking"
+            worker["needs_input"] = False
+            if event.get("model"):
+                worker["model"] = event["model"]
+            if event.get("platform"):
+                worker["platform"] = event["platform"]
+
+        elif kind == "thinking_done":
+            if worker["activity"] == "thinking":
+                worker["activity"] = "working"
+
+        elif kind == "tool_start":
+            worker["tool"] = event.get("tool_name")
+            worker["activity"] = activity_for_tool(event.get("tool_name"))
+
+        elif kind == "tool_end":
+            worker["tool"] = None
+            worker["activity"] = "working"
+
+        elif kind == "approval_wait":
+            worker["needs_input"] = True
+            worker["activity"] = "waiting"
+
+        elif kind == "approval_done":
+            worker["needs_input"] = False
+            worker["activity"] = "working"
+
+        elif kind == "api_request":
+            tokens_in, tokens_out = _tokens(event.get("usage"))
+            worker["calls"] += 1
+            worker["tokens_in"] += tokens_in
+            worker["tokens_out"] += tokens_out
+            worker["last_duration"] = _num(event.get("api_duration")) or worker["last_duration"]
+            for field in ("model", "provider", "base_url", "platform"):
+                if event.get(field):
+                    worker[field] = event[field]
+            self._desk_totals(worker.get("desk"), tokens_in, tokens_out)
+
+    def _apply_roster(self, roster: dict[str, Any]) -> None:
+        self.office_name = str(roster.get("office_name") or self.office_name)
+        self.gateway_base_url = str(roster.get("gateway_base_url") or self.gateway_base_url)
+        self.roster_source = str(roster.get("source") or self.roster_source)
+        self.roster_problems = [str(p) for p in (roster.get("problems") or [])]
+
+        order: list[str] = []
+        for raw in roster.get("desks") or []:
+            if not isinstance(raw, dict):
+                continue
+            desk_id = str(raw.get("id") or "").strip()
+            if not desk_id:
+                continue
+            order.append(desk_id)
+            desk = self.desks.get(desk_id)
+            if desk is None:
+                desk = {"calls": 0, "tokens_in": 0, "tokens_out": 0}
+                self.desks[desk_id] = desk
+            desk.update(
+                {
+                    "id": desk_id,
+                    "label": str(raw.get("label") or desk_id),
+                    "model": str(raw.get("model") or ""),
+                    "origin": str(raw.get("origin") or "unknown"),
+                    "provider": str(raw.get("provider") or ""),
+                    "note": str(raw.get("note") or ""),
+                    "toolsets": list(raw.get("toolsets") or []),
+                }
+            )
+        if order:
+            self.desk_order = order
+
+    # -- snapshot -----------------------------------------------------------
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            now = time.time()
+            workers = []
+            for worker in self.workers.values():
+                ended = worker.get("ended_at")
+                if ended and (now - ended) > GONE_AFTER_SECONDS:
+                    continue
+                view = dict(worker)
+                if not ended and (now - worker["updated_at"]) > IDLE_AFTER_SECONDS:
+                    view["activity"] = "idle"
+                view["gone"] = bool(ended)
+                workers.append(view)
+
+            workers.sort(key=lambda w: (w["kind"] != "session", w["started_at"]))
+
+            totals = {"calls": 0, "tokens_in": 0, "tokens_out": 0}
+            by_origin: dict[str, dict[str, int]] = {}
+            by_model: dict[str, dict[str, int]] = {}
+            for worker in workers:
+                totals["calls"] += worker["calls"]
+                totals["tokens_in"] += worker["tokens_in"]
+                totals["tokens_out"] += worker["tokens_out"]
+                origin = worker.get("origin") or "unknown"
+                bucket = by_origin.setdefault(
+                    origin, {"calls": 0, "tokens_in": 0, "tokens_out": 0}
+                )
+                bucket["calls"] += worker["calls"]
+                bucket["tokens_in"] += worker["tokens_in"]
+                bucket["tokens_out"] += worker["tokens_out"]
+                model = worker.get("model") or "unknown"
+                mbucket = by_model.setdefault(
+                    model, {"calls": 0, "tokens_in": 0, "tokens_out": 0}
+                )
+                mbucket["calls"] += worker["calls"]
+                mbucket["tokens_in"] += worker["tokens_in"]
+                mbucket["tokens_out"] += worker["tokens_out"]
+
+            desks = [
+                dict(self.desks[desk_id])
+                for desk_id in self.desk_order
+                if desk_id in self.desks
+            ]
+            for desk in desks:
+                desk["seated"] = [
+                    w["id"] for w in workers if w.get("desk") == desk["id"] and not w["gone"]
+                ]
+
+            return {
+                "seq": self.seq,
+                "now": now,
+                "office": {
+                    "name": self.office_name,
+                    "gateway_base_url": self.gateway_base_url,
+                    "roster_source": self.roster_source,
+                    "problems": list(self.roster_problems),
+                    "uptime_seconds": round(now - self.started_at, 1),
+                },
+                "desks": desks,
+                "workers": workers,
+                "totals": totals,
+                "by_origin": by_origin,
+                "by_model": by_model,
+                "waiting": sum(1 for w in workers if w.get("needs_input")),
+            }

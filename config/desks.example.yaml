@@ -1,0 +1,58 @@
+# รายชื่อโต๊ะ — ไฟล์เดียวที่บอกว่าโต๊ะไหนใช้โมเดลอะไร
+#
+# ติดตั้งไว้ที่ ~/.hermes/visual-office/desks.yaml (ตัวติดตั้งคัดลอกให้)
+# แก้แล้วต้องเริ่ม session ใหม่ เพราะรายชื่อโต๊ะถูกอ่านตอนโหลดปลั๊กอิน
+#
+# ข้อจำกัดที่ต้องรู้ก่อนตั้ง:
+#   ลูกน้อง (subagent) รับได้แค่ "ชื่อโมเดล" · ปลายทางจริง (base_url, คีย์)
+#   สืบทอดมาจากตัวแม่เสมอ · ดังนั้นตัวแม่ต้องชี้ไปยังที่ที่เรียกได้ครบทุกโมเดล
+#   ที่อยู่ในไฟล์นี้ ซึ่งก็คือหน้าที่ของ gateway
+#
+#   ตั้ง model.base_url ของ Hermes ให้ชี้ไป LiteGate แล้วใส่ alias ของ LiteGate
+#   ในช่อง model ข้างล่าง — โต๊ะหนึ่งจะนั่งอยู่บน GPU ของเราหรือบนคลาวด์ก็ได้
+#   โดยที่ Hermes ไม่ต้องรู้ความต่าง
+
+version: 1
+
+office:
+  name: ห้องทำงาน EduLLM
+
+gateway:
+  # เขียนไว้ให้คนอ่านและให้หน้าเว็บแสดง — ตัวที่ใช้จริงคือ model.base_url ใน
+  # ~/.hermes/config.yaml ต้องตั้งให้ตรงกัน
+  base_url: http://192.168.139.140:8080/v1
+
+desks:
+  - id: coder
+    label: ช่างโค้ด
+    model: coder-next
+    origin: local
+    provider: litegate
+    note: โมเดลโค้ด 80B MoE บน Spark ของเราเอง
+    toolsets: [file, terminal, web, todo]
+
+  - id: reviewer
+    label: คนตรวจงาน
+    model: claude-sonnet-4.8
+    origin: local
+    provider: litegate
+    note: อ่านภาพได้ คิดเป็นขั้นตอน context 262K
+    toolsets: [file, web, todo]
+
+  - id: runner
+    label: คนวิ่งงานย่อย
+    model: claude-haiku-4.8
+    origin: local
+    provider: litegate
+    note: งานสั้น ๆ ที่ไม่ต้องคิดมาก
+    toolsets: [file, web]
+
+  # เปิดใช้เมื่อเพิ่ม endpoint คลาวด์ใน LiteGate แล้ว — origin: cloud ทำให้
+  # ตัวละครใส่ปลอกคอสีเหลือง เตือนว่าโต๊ะนี้จ่ายตามการใช้งาน
+  # - id: vision
+  #   label: คนดูรูป
+  #   model: gemini-2.5-flash
+  #   origin: cloud
+  #   provider: gemini
+  #   note: อ่านรูปและเอกสารสแกน
+  #   toolsets: [file, vision, web]

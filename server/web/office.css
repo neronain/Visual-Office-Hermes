@@ -1,0 +1,232 @@
+/* Visual Office — a wall monitor, not a document.
+   One committed look: a dim room, warm lamplight, and enough contrast that the
+   token counters read from across a meeting table. */
+
+:root {
+  --ground:  #0b1016;
+  --panel:   #121a23;
+  --panel-2: #182231;
+  --line:    #22303f;
+  --ink:     #e6edf4;
+  --ink-2:   #9fb0c0;
+  --muted:   #6d7f90;
+  --lamp:    #e8a33d;
+  --local:   #4fbb80;
+  --cloud:   #d9a03c;
+  --alert:   #e4756a;
+  --font: "IBM Plex Sans Thai", "Noto Sans Thai", system-ui, -apple-system, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--ground);
+  color: var(--ink-2);
+  font-family: var(--font);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "bar   bar"
+    "room  panel"
+    "foot  foot";
+  overflow: hidden;
+}
+
+/* ---------- header ---------- */
+
+.bar {
+  grid-area: bar;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+  padding: 14px 22px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.bar-id { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+
+.bar-id h1 {
+  font-size: 19px;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0;
+  white-space: nowrap;
+}
+
+.dot {
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: var(--muted);
+  align-self: center;
+  flex: none;
+  transition: background .3s;
+}
+.dot.live { background: var(--local); box-shadow: 0 0 10px rgba(79,187,128,.7); }
+.dot.down { background: var(--alert); }
+
+.gw {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar-stats { display: flex; gap: 26px; flex-wrap: wrap; }
+
+.stat { display: flex; flex-direction: column; line-height: 1.25; }
+.stat[hidden] { display: none; }
+.stat .k {
+  font-size: 10.5px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.stat b {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 21px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.stat.alert b { color: var(--alert); }
+
+/* ---------- room ---------- */
+
+.room {
+  grid-area: room;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+
+#office { display: block; width: 100%; height: 100%; }
+
+.empty {
+  position: absolute;
+  inset: auto 0 44% 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+  margin: 0;
+  padding: 0 24px;
+  pointer-events: none;
+}
+.empty[hidden] { display: none; }
+
+/* ---------- panel ---------- */
+
+.panel {
+  grid-area: panel;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  overflow-y: auto;
+  padding: 18px 18px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+}
+
+.panel h2 {
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--lamp);
+  margin: 0 0 12px;
+  font-weight: 600;
+}
+
+.panel ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.panel .muted { color: var(--muted); font-size: 13px; }
+
+.desks li {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--muted);
+  padding: 10px 12px;
+}
+.desks li.local { border-left-color: var(--local); }
+.desks li.cloud { border-left-color: var(--cloud); }
+.desks li.busy  { background: #1d2a3a; }
+
+.desks .row1 { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.desks .name { color: var(--ink); font-size: 14px; font-weight: 600; }
+.desks .count {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--lamp);
+  white-space: nowrap;
+}
+.desks .model {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-2);
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+.desks .note { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+.models li {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) auto;
+  gap: 10px;
+  align-items: baseline;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 7px;
+}
+.models .m {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.models .n {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.problems li {
+  font-size: 12.5px;
+  color: var(--alert);
+  border-left: 2px solid var(--alert);
+  padding-left: 10px;
+}
+
+/* ---------- footer ---------- */
+
+.foot {
+  grid-area: foot;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 22px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+@media (max-width: 900px) {
+  body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "bar" "room" "panel" "foot";
+    grid-template-rows: auto 58vh auto auto;
+    overflow: auto;
+  }
+  .panel { border-left: none; border-top: 1px solid var(--line); }
+}

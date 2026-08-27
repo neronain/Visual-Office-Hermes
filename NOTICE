@@ -1,0 +1,15 @@
+Visual Office for Hermes
+Copyright (c) 2026 neronain — https://www.facebook.com/neronain.minidev
+
+Licensed under the MIT License (see LICENSE). You may fork this and build on it
+commercially; the copyright notice above stays.
+
+This project is an integration layer. It contains no code from the projects
+below, but it is designed against their public interfaces and owes them the
+ideas it is built on:
+
+  - NousResearch/hermes-agent (MIT) — the agent, and the public subagent
+    lifecycle API that makes per-desk models possible without a fork.
+  - teknium1/hermes-pixel-office — the hook -> event log -> canvas shape.
+  - aiunlocked1412/hermes-agent-pixel — the server-discovery and
+    fire-and-forget relay pattern used by the plugin sink.
