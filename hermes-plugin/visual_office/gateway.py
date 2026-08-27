@@ -71,6 +71,54 @@ def _resolve_key(value: Any) -> str:
     return os.environ.get(name, "").strip() or _env_file_value(name)
 
 
+# ---------------------------------------------------------------------------
+# Which live conversation a command from the office should land in
+# ---------------------------------------------------------------------------
+
+
+def known_channels() -> list[dict[str, Any]]:
+    """Chats Hermes has seen, from the directory the gateway keeps up to date."""
+    path = config_path().with_name("channel_directory.json")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    out = []
+    for platform, entries in (data.get("platforms") or {}).items():
+        for entry in entries or []:
+            if isinstance(entry, dict) and entry.get("id"):
+                out.append({
+                    "platform": str(platform),
+                    "chat_id": str(entry["id"]),
+                    "chat_type": str(entry.get("type") or "dm"),
+                    "thread_id": entry.get("thread_id") or None,
+                    "name": str(entry.get("name") or ""),
+                })
+    return out
+
+
+def session_key_for(channel: dict[str, Any]) -> str:
+    """Build the gateway session key for a channel.
+
+    Uses Hermes' own ``build_session_key`` — it calls itself the single source
+    of truth for this, and a second implementation here would drift the first
+    time the rules change.
+    """
+    try:
+        from gateway.session import Platform, SessionSource, build_session_key
+
+        source = SessionSource(
+            platform=Platform(channel["platform"]),
+            chat_id=channel["chat_id"],
+            chat_type=channel.get("chat_type") or "dm",
+            thread_id=channel.get("thread_id"),
+        )
+        return build_session_key(source)
+    except Exception as exc:
+        logger.debug("visual_office could not build a session key: %s", exc)
+        return ""
+
+
 def agent_model() -> tuple[str, str, str]:
     """``(model, base_url, api_key)`` the top-level agent is configured with."""
     model_cfg = _load_config().get("model") or {}

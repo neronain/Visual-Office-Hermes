@@ -358,19 +358,70 @@ def _remember_session(session_id: Any, platform: Any = None) -> None:
         key = get_session_env("HERMES_SESSION_KEY", "")
     except Exception:
         key = ""
+    fresh = False
     with _SESSIONS_LOCK:
         entry = _SESSIONS.setdefault(sid, {})
         entry["at"] = time.time()
-        if key:
+        if key and entry.get("key") != key:
             entry["key"] = key
+            fresh = True
         if platform:
             entry["platform"] = str(platform)
+    if fresh:
+        _save_sessions()
+
+
+def _sessions_file():
+    return desks_path().with_name("sessions.json")
+
+
+def _save_sessions() -> None:
+    """Remember session keys across a gateway restart.
+
+    Without this, the office cannot send anything until somebody happens to talk
+    to Hermes first — which is exactly the moment they were trying to avoid by
+    using the office in the first place.
+    """
+    try:
+        with _SESSIONS_LOCK:
+            live = {k: v for k, v in _SESSIONS.items() if v.get("key")}
+        path = _sessions_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(live, ensure_ascii=False), encoding="utf-8")
+    except Exception as exc:
+        logger.debug("visual_office could not save sessions: %s", exc)
+
+
+def _load_sessions() -> None:
+    try:
+        data = json.loads(_sessions_file().read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(data, dict):
+        return
+    with _SESSIONS_LOCK:
+        for sid, entry in data.items():
+            if isinstance(entry, dict) and entry.get("key"):
+                _SESSIONS.setdefault(sid, entry)
 
 
 def _newest_session() -> Optional[dict[str, Any]]:
+    """The conversation a command should land in.
+
+    First choice is a session this process has actually seen. Failing that, a
+    channel the gateway knows about — its key is built by Hermes' own builder,
+    so an office that has just restarted can still send.
+    """
     with _SESSIONS_LOCK:
         live = [e for e in _SESSIONS.values() if e.get("key")]
-    return max(live, key=lambda e: e["at"]) if live else None
+    if live:
+        return max(live, key=lambda e: e["at"])
+
+    for channel in gw.known_channels():
+        key = gw.session_key_for(channel)
+        if key:
+            return {"key": key, "platform": channel["platform"], "at": 0.0}
+    return None
 
 
 def _command_text(command: dict[str, Any]) -> str:
@@ -771,6 +822,7 @@ def register(ctx) -> None:
     # this plugin does not also require editing platform_toolsets.
     roster = _roster(refresh=True)
     _sync_tool(roster)
+    _load_sessions()
     _announce_roster()
     _start_command_loop()
     logger.info(
