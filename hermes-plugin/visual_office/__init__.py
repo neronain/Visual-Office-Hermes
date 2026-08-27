@@ -437,6 +437,30 @@ def _run_command(command: dict[str, Any]) -> None:
     command_id = command.get("id")
     result: dict[str, Any] = {"id": command_id}
 
+    # โต๊ะที่ชี้ endpoint ของตัวเองไม่ต้องผ่านโมเดลหลัก — เดิมคำสั่งถูกฉีดเป็นข้อความ
+    # เข้าแชท แล้วรอโมเดลหลักอ่านและตัดสินใจเรียก office_delegate เอง กว่าโต๊ะจะเริ่ม
+    # ทำงานก็ผ่านไปเป็นนาที และคำสั่งหลายอันก็ต่อคิวกันในบทสนทนาเดียว
+    #
+    # ยิงตรงจากตรงนี้ได้เลยเพราะโต๊ะแบบนี้ไม่ต้องใช้ tools หรือ session ของ Hermes อยู่แล้ว
+    desk_id = str(command.get("desk") or "").strip()
+    desk = _roster().find(desk_id) if desk_id else None
+    if desk is not None and desk.direct:
+        goal = str(command.get("text") or "").strip()
+        if not goal:
+            result.update(ok=False, error="ไม่มีข้อความให้ทำ")
+        else:
+            try:
+                timeout = _wait_seconds()
+                run = _start_direct(desk, goal, None, timeout)
+                _watch_direct(run.run_id, timeout)
+                result.update(ok=True, platform=f"direct:{desk.id}")
+            except Exception as exc:  # pragma: no cover - defensive
+                result.update(ok=False, error=f"เรียก {desk.base_url} ไม่สำเร็จ: {exc}")
+        _SINK.post_now("/api/command/result", result)
+        logger.info("visual_office command %s -> %s (ยิงตรง %s)",
+                    command_id, result.get("ok"), desk.id)
+        return
+
     if _CTX is None:
         result.update(ok=False, error="ปลั๊กอินยังไม่พร้อม")
     else:
@@ -630,6 +654,42 @@ def _handle_spawn(params: dict) -> str:
     )
 
 
+def _office_id(desk_id: str) -> str:
+    """ตัวตนของคนที่นั่งโต๊ะยิงตรงในสายตาของห้อง
+
+    ต้องคงที่ต่อโต๊ะ ไม่ใช่ต่องาน · ห้องนับคนด้วย session_id ดังนั้น id ใหม่ทุกครั้งที่
+    สั่งงาน = ตัวละครใหม่ทุกครั้ง โผล่มาแล้วเดินออกไปทันทีที่งานจบ ซึ่งไม่ใช่สิ่งที่
+    เกิดขึ้นจริง — โต๊ะนั้นมีคนนั่งอยู่ตลอด แค่ว่างงานเป็นพัก ๆ
+    """
+    return f"desk:{desk_id}"
+
+
+def _start_direct(desk, goal: str, context: Optional[str], timeout: float) -> direct.DirectRun:
+    """เริ่มงานที่โต๊ะยิงตรง แล้วบอกห้องว่าคนที่โต๊ะนี้เริ่มทำงานแล้ว"""
+    run = direct.launch(desk, goal, context, timeout)
+    who = _office_id(desk.id)
+    _emit(
+        "subagent_start",
+        session_id=who,
+        subagent_id=who,
+        role=desk.role,
+        goal=goal,
+    )
+    _emit(
+        "desk_assign",
+        subagent_id=who,
+        desk=desk.id,
+        desk_label=desk.label,
+        origin=desk.origin,
+        model=desk.model,
+        provider=desk.provider,
+        goal=goal,
+        via=desk.base_url,
+    )
+    _emit("thinking", session_id=who, model=desk.model)
+    return run
+
+
 def _direct_payload(run: direct.DirectRun, **extra: Any) -> str:
     return json.dumps(
         {
@@ -657,26 +717,7 @@ def _spawn_direct(desk, goal: str, params: dict, wait_for_it: bool, timeout: flo
     ทางนี้ไม่มีใครส่งให้ ถ้าไม่ทำเองตัวละครจะไม่ขยับและคำตอบจะไม่ขึ้นบนหน้าจอเลย
     """
     context = str(params.get("context") or "") or None
-    run = direct.launch(desk, goal, context, timeout)
-
-    _emit(
-        "desk_assign",
-        subagent_id=run.run_id,
-        desk=desk.id,
-        desk_label=desk.label,
-        origin=desk.origin,
-        model=desk.model,
-        provider=desk.provider,
-        goal=goal,
-        via=desk.base_url,
-    )
-    _emit(
-        "subagent_start",
-        session_id=run.run_id,
-        subagent_id=run.run_id,
-        role=desk.role,
-        goal=goal,
-    )
+    run = _start_direct(desk, goal, context, timeout)
 
     if not wait_for_it:
         _watch_direct(run.run_id, timeout)
@@ -714,22 +755,20 @@ def _report_direct(run: direct.DirectRun) -> None:
         if not run.terminal or run._reported:
             return
         run._reported = True
+    who = _office_id(run.desk_id)
     if run.summary:
         _emit(
             "reply",
-            session_id=run.run_id,
-            subagent_id=run.run_id,
+            session_id=who,
+            subagent_id=who,
             model=run.model,
             text=run.summary[:REPLY_MAX_CHARS],
         )
-    _emit(
-        "subagent_stop",
-        session_id=run.run_id,
-        subagent_id=run.run_id,
-        status=run.state,
-        summary=run.summary or run.error,
-        duration_ms=int((run.duration_seconds or 0) * 1000),
-    )
+    elif run.error:
+        _emit("reply", session_id=who, model=run.model, text=f"ทำงานไม่สำเร็จ: {run.error}")
+    # ไม่ส่ง subagent_stop: ห้องถือว่านั่นแปลว่า "คนนี้ออกไปแล้ว" แล้วตัวละครจะเดินออก
+    # ทุกครั้งที่ตอบเสร็จ · คนที่นั่งโต๊ะยิงตรงแค่ว่างงาน ไม่ได้กลับบ้าน
+    _emit("thinking_done", session_id=who, model=run.model)
 
 
 def _watch_direct(run_id: str, timeout: float) -> None:
