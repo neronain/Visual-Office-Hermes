@@ -1185,13 +1185,29 @@ function setEditorMessage(text, ok) {
 async function openEditor() {
   const dialog = document.getElementById('editor');
   setEditorMessage('');
-  let data;
+  let data = null;
   try {
-    data = await (await fetch('/api/desks')).json();
-  } catch (err) {
-    setEditorMessage('อ่านรายชื่อโต๊ะไม่ได้');
+    const res = await fetch('/api/desks');
+    if (res.ok) data = await res.json();
+  } catch (err) { /* handled below */ }
+
+  if (!data || !Array.isArray(data.desks)) {
+    // Open anyway. A dialog that refuses to appear looks like a broken button,
+    // and the reason it refused is exactly what the person needs to read.
+    editorState = { desks: [], writable: false };
+    document.getElementById('ed-desks').innerHTML = '';
+    const path = document.getElementById('editor-path');
+    path.textContent = 'อ่านรายชื่อโต๊ะจากเซิร์ฟเวอร์ไม่ได้';
+    path.classList.add('bad');
+    document.getElementById('ed-save').disabled = true;
+    document.getElementById('ed-add').disabled = true;
+    setEditorMessage('เซิร์ฟเวอร์ห้องไม่ตอบ — ลองรีเฟรชหน้านี้');
+    dialog.showModal();
     return;
   }
+
+  data.office = data.office || {};
+  data.gateway = data.gateway || {};
 
   editorState = {
     office: data.office.name || '',
