@@ -452,7 +452,7 @@ def _run_command(command: dict[str, Any]) -> None:
             try:
                 timeout = _wait_seconds()
                 run = _start_direct(desk, goal, None, timeout)
-                _watch_direct(run.run_id, timeout)
+                _watch_direct(run.run_id, timeout, command_id)
                 result.update(ok=True, platform=f"direct:{desk.id}")
             except Exception as exc:  # pragma: no cover - defensive
                 result.update(ok=False, error=f"เรียก {desk.base_url} ไม่สำเร็จ: {exc}")
@@ -771,12 +771,25 @@ def _report_direct(run: direct.DirectRun) -> None:
     _emit("thinking_done", session_id=who, model=run.model)
 
 
-def _watch_direct(run_id: str, timeout: float) -> None:
-    """รอผลของงานเบื้องหลังในเธรดแยก เพื่อให้ห้องได้เห็นคำตอบแม้ไม่มีใครมา poll"""
+def _watch_direct(run_id: str, timeout: float, command_id: Any = None) -> None:
+    """รอผลของงานเบื้องหลังในเธรดแยก เพื่อให้ห้องได้เห็นคำตอบแม้ไม่มีใครมา poll
+
+    ถ้างานนี้มาจากช่องสั่งงาน ส่งคำตอบกลับไปติดที่แถวคำสั่งด้วย — แผงคำตอบอยู่ล่างสุด
+    ของแถบข้าง คนสั่งงานเสร็จแล้วเห็นแค่ "เข้าคิวแล้ว" ค้างอยู่ ซึ่งอ่านว่าไม่มีอะไรเกิดขึ้น
+    """
     def _wait_then_report() -> None:
         run = direct.wait(run_id, timeout)
         if run is not None:
             _report_direct(run)
+            if command_id is not None:
+                _SINK.post_now("/api/command/result", {
+                    "id": command_id,
+                    "ok": run.state == direct.SUCCEEDED,
+                    "platform": f"direct:{run.desk_id}",
+                    "error": run.error,
+                    "answer": (run.summary or "")[:600],
+                    "seconds": run.duration_seconds,
+                })
 
     threading.Thread(
         target=_wait_then_report, name=f"visual-office-watch-{run_id}", daemon=True

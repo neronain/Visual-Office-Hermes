@@ -553,6 +553,10 @@ function newActor(worker, seat) {
     wanderCount: 0, wanderLimit: randInt(WANDER_MOVES[0], WANDER_MOVES[1]),
     seatTimer: 0, seatId: start.id || null,
     fade: 1, leaving: false,
+    // ห้องบอกได้แค่ว่า "ตอนนี้ทำอะไรอยู่" ไม่มีเหตุการณ์ว่า "เพิ่งเสร็จ" · จับเอาจาก
+    // จังหวะที่เลิกคิดแทน แล้วค้างเครื่องหมายถูกไว้ให้ทันเห็น
+    lastActivity: '',
+    doneAt: 0,
   };
 }
 
@@ -894,6 +898,56 @@ function drawLabels(workers) {
   ctx.textAlign = 'left';
 }
 
+/* ป้ายบอกสถานะเหนือหัว · ห้องตอบคำถามเดียวคือ "ตอนนี้เป็นยังไง" แต่ก่อนหน้านี้ตอบได้
+   เฉพาะตอนกำลังทำงาน — งานที่จบไปแล้วหน้าตาเหมือนกับงานที่ไม่เคยเริ่ม โดยเฉพาะโต๊ะ
+   ที่ยิงตรงซึ่งตอบเสร็จใน 2-3 วินาที */
+
+const DONE_BADGE_MS = 8000;
+
+function drawStatusBadges(workers) {
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  workers.forEach((worker) => {
+    const actor = actors.get(worker.id);
+    if (!actor || worker.gone || actor.fade < 0.5) return;
+
+    let mark = '';
+    let ring = '';
+    if (worker.needs_input) {
+      // รออนุมัติสำคัญกว่าอย่างอื่น: ไม่มีใครกดให้ งานก็ไม่เดินต่อ
+      mark = '!';
+      ring = '#e8a33d';
+    } else if (worker.activity === 'thinking') {
+      mark = '\u2026';
+      ring = '#5aa9e6';
+    } else if (performance.now() - actor.doneAt < DONE_BADGE_MS) {
+      mark = '\u2713';
+      ring = '#63c98a';
+    }
+    if (!mark) return;
+
+    const cx = px(actor.x);
+    const cy = py(actor.y - 30);
+    const r = 9;
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(14,11,18,.88)';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = ring;
+    ctx.stroke();
+
+    ctx.font = '600 12px "IBM Plex Sans Thai", system-ui, sans-serif';
+    ctx.fillStyle = ring;
+    ctx.fillText(mark, cx, cy + 1);
+  });
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+}
+
 /* ------------------------------------------------------------------ loop */
 
 let lastTick = 0;
@@ -971,6 +1025,13 @@ function stepWorld(seconds) {
       actors.set(worker.id, actor);
     }
     actor.seatId = worker.seatId || actor.seatId;
+
+    // เลิกคิด = งานชิ้นนั้นจบ · ถ้าไม่ค้างไว้ คนที่ตอบใน 2 วินาทีก็ผ่านไปโดยไม่มีใครทัน
+    // เห็นว่ามันทำงาน — ซึ่งอ่านได้เหมือนกับว่าไม่เคยทำงานเลย
+    if (actor.lastActivity === 'thinking' && worker.activity !== 'thinking') {
+      actor.doneAt = performance.now();
+    }
+    actor.lastActivity = worker.activity || '';
     for (let debt = simDebt; debt >= SIM_STEP; debt -= SIM_STEP) {
       updateActor(actor, worker, SIM_STEP);
     }
@@ -1071,6 +1132,7 @@ function tick(stamp) {
   });
 
   drawLabels(workers);
+  drawStatusBadges(workers);
   requestAnimationFrame(tick);
 }
 
@@ -1687,8 +1749,14 @@ function renderSayLog(rows) {
     const where = row.desk ? `โต๊ะ ${esc(row.desk)}` : 'ตัวหลัก';
     const state = row.state === 'done' ? '' : row.state === 'failed' ? ` — ${esc(row.error || 'ส่งไม่สำเร็จ')}`
       : row.state === 'sent' ? ' — ส่งแล้ว รอ Hermes' : ' — รอปลั๊กอินมารับ';
+    // โต๊ะที่ยิงตรงส่งคำตอบกลับมาติดกับแถว · แสดงตรงนี้เลย เพราะแผงคำตอบเต็ม ๆ อยู่
+    // ล่างสุดของแถบข้าง กว่าจะเลื่อนไปเจอก็นึกว่าคำสั่งไม่ทำงาน
+    const took = row.seconds ? ` · ${row.seconds}s` : '';
+    const answer = row.answer
+      ? `<span class="answer">${esc(row.answer.slice(0, 240))}${row.answer.length > 240 ? '…' : ''}${took}</span>`
+      : '';
     return `<li class="${esc(row.state)}"><span class="where">${where}</span> `
-      + `<span class="what">${esc(row.text.slice(0, 90))}</span>${state}</li>`;
+      + `<span class="what">${esc(row.text.slice(0, 90))}</span>${state}${answer}</li>`;
   }).join('');
 }
 

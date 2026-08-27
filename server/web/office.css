@@ -643,3 +643,16 @@ body.resizing-panel { user-select: none; cursor: col-resize; }
 
 .ed-desk label.dim { opacity: 0.45; }
 .ed-desk label.dim input { cursor: not-allowed; }
+
+/* คำตอบที่ติดมากับแถวคำสั่ง — ย่อหน้าเข้าไปให้เห็นว่าเป็นผลของบรรทัดข้างบน */
+#say-log .answer {
+  display: block;
+  margin: 4px 0 0 10px;
+  padding-left: 8px;
+  border-left: 2px solid var(--local, #63c98a);
+  color: var(--ink-2);
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

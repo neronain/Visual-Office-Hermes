@@ -228,6 +228,12 @@ class Handler(BaseHTTPRequestHandler):
                     row["error"] = str(body.get("error") or "")
                     row["platform"] = str(body.get("platform") or "")
                     row["done_at"] = time.time()
+                    # โต๊ะที่ยิงตรงส่งคำตอบกลับมาด้วย · ติดไว้กับแถวคำสั่งเลย คนสั่งจะได้
+                    # เห็นผลตรงที่ตัวเองพิมพ์ ไม่ต้องเลื่อนไปหาที่แผงล่างสุด
+                    if body.get("answer"):
+                        row["answer"] = str(body["answer"])
+                    if body.get("seconds") is not None:
+                        row["seconds"] = body["seconds"]
         self._json(200, {"ok": True})
 
     def do_PUT(self) -> None:  # noqa: N802
