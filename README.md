@@ -33,8 +33,9 @@ MIT — fork และต่อยอดเชิงพาณิชย์ได�
 | | |
 |---|---|
 | 🪑 **โต๊ะผูกกับโมเดล** | เครื่องมือ `office_delegate` ส่งงานไป *ชื่อโต๊ะ* ไม่ใช่ลูกน้องนิรนาม · ลูกที่เกิดมาถูกปักหมุดไว้กับโมเดลของโต๊ะนั้น ผ่าน subagent lifecycle API ที่ Hermes เปิดไว้ให้ปลั๊กอินอย่างเป็นทางการ |
-| 📊 **มิติโมเดลบนตัวละคร** | hook `post_api_request` ให้ทั้ง `model`, `provider`, `base_url` และ `usage` มาทุกครั้งที่เรียก · ตัวละครจึงมีป้ายชื่อโมเดล ปลอกคอบอกว่ามาจากเครื่องเราหรือคลาวด์ และตัวนับโทเคนรายโต๊ะ |
+| 📊 **มิติโมเดลบนตัวละคร** | hook `post_api_request` ให้ทั้ง `model`, `provider`, `base_url` และ `usage` มาทุกครั้งที่เรียก · ป้ายชื่อโต๊ะจึงมีชื่อโมเดลเป็นสีตามแหล่ง (เขียว = GPU เรา · เหลือง = คลาวด์) จอบนโต๊ะติดเฉพาะตอนโต๊ะนั้นทำงาน และมีตัวนับโทเคนรายโต๊ะ |
 | 🧩 **ไม่แตะ Hermes** | เป็นปลั๊กอินล้วน ๆ ไม่มีการแก้โค้ดต้นทาง · hook ทุกตัวคืน `None` การส่งอีเวนต์เป็นแบบยิงแล้วลืม · เซิร์ฟเวอร์ล่มแล้ว Hermes ไม่รู้สึกอะไร |
+| 🎨 **อาร์ตพิกเซลของจริง** | เฟอร์นิเจอร์ พื้น ผนัง และตัวละครมาจากชุดอาร์ตโอเพนซอร์สของ [Pixel Agents](https://github.com/pixel-agents-hq/pixel-agents) (MIT) · พื้นกับผนังเป็นลายเทาที่ถูกย้อมสีตอนโหลด พื้นไม้กับพรมน้ำเงินจึงมาจากไฟล์เดียวกัน |
 | 🪶 **ไม่มี dependency** | ฝั่งเซิร์ฟเวอร์ใช้ python มาตรฐานอย่างเดียว ฝั่งหน้าเว็บเป็น canvas + JS ล้วน · ไม่มี npm ไม่มี build step ก๊อปไปเครื่องไหนก็รันได้ |
 
 ---
@@ -115,7 +116,7 @@ export VISUAL_OFFICE_TOKEN=<token ที่เซิร์ฟเวอร์พ�
 ```yaml
 version: 1
 office:
-  name: ห้องทำงาน EduLLM
+  name: Visual Office
 gateway:
   base_url: http://192.168.139.140:8080/v1
 
@@ -179,4 +180,5 @@ desks:
 - [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) — ตัวเอเจนต์ และ subagent lifecycle API ที่ทำให้เรื่องนี้เป็นไปได้โดยไม่ต้อง fork
 - [teknium1/hermes-pixel-office](https://github.com/teknium1/hermes-pixel-office) — ต้นแบบแนวคิด hook → log → หน้าเว็บ
 - [aiunlocked1412/hermes-agent-pixel](https://github.com/aiunlocked1412/hermes-agent-pixel) — ต้นแบบการค้นหาเซิร์ฟเวอร์และคิวส่งอีเวนต์แบบยิงแล้วลืม
+- [pixel-agents-hq/pixel-agents](https://github.com/pixel-agents-hq/pixel-agents) (MIT, Pablo De Lucca) — ชุดอาร์ตทั้งหมดที่ห้องนี้ใช้ · ตัวละครอ้างอิงงานฟรีของ [JIK-A-4](https://jik-a-4.itch.io/metrocity-free-topdown-character-pack) · ดู [NOTICE](NOTICE)
 - [neronain/AiGatewayLocal](https://github.com/neronain/AiGatewayLocal) — LiteGate ประตูเดียวที่ทำให้ alias ของโต๊ะไปถึงหลายผู้ให้บริการได้

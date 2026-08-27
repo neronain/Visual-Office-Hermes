@@ -48,6 +48,8 @@ CONTENT_TYPES = {
     ".svg": "image/svg+xml",
     ".png": "image/png",
     ".ico": "image/x-icon",
+    ".json": "application/json; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
 }
 
 
@@ -129,8 +131,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        for key, value in (extra or {}).items():
+        extra = dict(extra or {})
+        self.send_header("Cache-Control", extra.pop("Cache-Control", "no-store"))
+        for key, value in extra.items():
             self.send_header(key, value)
         self.end_headers()
         try:
@@ -195,12 +198,19 @@ class Handler(BaseHTTPRequestHandler):
             self._stream()
         elif path in ("/", "/index.html"):
             self._static("index.html")
-        elif path.lstrip("/") in {p.name for p in WEB_DIR.glob("*") if p.is_file()}:
-            self._static(path.lstrip("/"))
         else:
-            self._json(404, {"error": "not found"})
+            self._static(path.lstrip("/"))
 
     def _static(self, name: str) -> None:
+        """Serve one file from web/, subdirectories included.
+
+        The art lives under web/assets/**, so this cannot be a flat listing.
+        Resolve first and confirm the result is still inside web/ — that check
+        is what stops ``../`` from walking out, not any pattern on the name.
+        """
+        if not name or name.startswith("/"):
+            self._json(404, {"error": "not found"})
+            return
         target = (WEB_DIR / name).resolve()
         try:
             target.relative_to(WEB_DIR.resolve())
@@ -210,10 +220,12 @@ class Handler(BaseHTTPRequestHandler):
         if not target.is_file():
             self._json(404, {"error": f"{name} is missing from {WEB_DIR}"})
             return
+        cache = "public, max-age=3600" if "/assets/" in f"/{name}" else "no-store"
         self._send(
             200,
             target.read_bytes(),
             CONTENT_TYPES.get(target.suffix, "application/octet-stream"),
+            {"Cache-Control": cache},
         )
 
     def _stream(self) -> None:

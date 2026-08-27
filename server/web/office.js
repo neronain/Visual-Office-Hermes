@@ -1,101 +1,70 @@
-/* Visual Office — top-down pixel office renderer.
+/* Visual Office — sprite renderer.
+ *
+ * The art under web/assets/ is the open-source Pixel Agents furniture, floor,
+ * wall and character set (MIT, Pablo De Lucca; characters after JIK-A-4's free
+ * Metro City pack). This file is our own renderer for it: no build step, no
+ * framework — plain canvas drawImage against a tile grid.
+ *
+ * Floors and walls ship as grayscale patterns and are tinted at load time with
+ * the same luminance→HSL colorize the original editor uses, so a wooden floor
+ * and a blue carpet come from the same PNG. Furniture and characters are drawn
+ * as-is.
  *
  * The server sends a whole snapshot on every change; this file owns only what a
- * snapshot cannot carry: where each character stands, which animation frame it
- * is on, and how it walks in through the door.
+ * snapshot cannot carry: where each character stands, which way it faces, which
+ * animation frame it is on, and how it walks in through the door.
  *
- * Everything is drawn into a fixed virtual room, then scaled to fit the canvas
- * with integer-snapped rectangles, so the art stays crisp at any size. Labels
- * are drawn afterwards in screen space so text never blurs.
- *
- * The rule that shapes the art: a character must say which model is behind it.
- * A desk's chair and nameplate take the origin colour — green for a model on our
- * own machines, amber for a cloud model — and desk workers wear a collar to
- * match. Everything else is set dressing.
+ * The rule that shapes the room: a character must say which model is behind it.
+ * Each desk's nameplate carries the alias in its origin colour — green for a
+ * model on our own machines, amber for a cloud model — and the monitor only
+ * glows while that desk is working.
  */
 
 'use strict';
 
-/* ------------------------------------------------------------------ palette */
+const TILE = 16;
+const ASSETS = 'assets';
 
-const C = {
-  void:      '#141019',
-  wall:      '#2e3a5c',
-  wallTrim:  '#1f2742',
-  wallBase:  '#3a4870',
-  wood:      '#7d4c2c',
-  woodLine:  '#6b3f24',
-  carpet:    '#41719f',
-  carpetAlt: '#4a7cae',
-  tileA:     '#e4e0d6',
-  tileB:     '#262b36',
-  deskTop:   '#c9954f',
-  deskEdge:  '#a1743a',
-  deskLeg:   '#7c8596',
-  crt:       '#dfe2e6',
-  crtDark:   '#b3b8c0',
-  crtOff:    '#3b3138',
-  crtOn:     '#c0392b',
-  chairDark: '#3f8a4a',
-  meetSeat:  '#c3c9d4',
-  meetSeatD: '#98a0af',
-  sofa:      '#b8425f',
-  sofaDark:  '#8e2f47',
-  sofaLite:  '#d1596f',
-  leaf:      '#2f7a3f',
-  leafLite:  '#43a055',
-  pot:       '#8a4f2c',
-  frame:     '#b8863f',
-  art:       '#5b4a6b',
-  shelf:     '#8a5a33',
-  shelfLine: '#6d4527',
-  metal:     '#8b93a3',
-  shadow:    'rgba(0,0,0,.28)',
+/* Colorize values lifted from the reference layout so the rooms read the same. */
+const TINT = {
+  wood:   { h: 25,  s: 48, b: -43,  c: -88 },
+  carpet: { h: 209, s: 39, b: -25,  c: -80 },
+  tile:   { h: 209, s: 0,  b: -16,  c: -8 },
+  wall:   { h: 214, s: 30, b: -100, c: -55 },
 };
 
-const BOOKS = ['#c0392b', '#e8a33d', '#4fbb80', '#5b8fd6', '#b06fc0', '#d9d0b8'];
-const ORIGIN_COLOR = { local: '#4fbb80', cloud: '#e8a33d', unknown: '#8b93a3' };
+const ORIGIN_COLOR = { local: '#4fbb80', cloud: '#e8a33d', unknown: '#b6c0cc' };
 
-/* ------------------------------------------------------------------ sprite */
+/* Furniture we actually place, with the sprite size the manifests declare. */
+const FURNITURE = {
+  DESK_FRONT:        [48, 32], PC_FRONT_OFF:  [16, 32],
+  PC_FRONT_ON_1:     [16, 32], PC_FRONT_ON_2: [16, 32], PC_FRONT_ON_3: [16, 32],
+  PC_SIDE:           [16, 32], CUSHIONED_BENCH: [16, 16],
+  WOODEN_CHAIR_SIDE: [16, 32], TABLE_FRONT:   [48, 64],
+  SOFA_FRONT:        [32, 16], SOFA_BACK:     [32, 16], SOFA_SIDE: [16, 32],
+  COFFEE_TABLE:      [32, 32], COFFEE:        [16, 16],
+  DOUBLE_BOOKSHELF:  [32, 32], BOOKSHELF:     [32, 16], CLOCK: [16, 32],
+  HANGING_PLANT:     [16, 32], WHITEBOARD:    [32, 32],
+  SMALL_PAINTING:    [16, 32], SMALL_PAINTING_2: [16, 32], LARGE_PAINTING: [32, 32],
+  PLANT:             [16, 32], PLANT_2:       [16, 32], LARGE_PLANT: [32, 48],
+  BIN:               [16, 16], SMALL_TABLE_FRONT: [32, 32],
+};
 
-const SPRITE = [
-  '...hhhhh...',
-  '..hhhhhhh..',
-  '.hhhhhhhhh.',
-  '.hhsssssh..',
-  '.hse.s.esh.',
-  '.hhsssssh..',
-  '..sssssss..',
-  '...ccccc...',
-  '..abbbbba..',
-  '..abbbbba..',
-  '..abbbbba..',
-  '...bbbbb...',
-  '...ppppp...',
-  '...pp.pp...',
-  '...pp.pp...',
-  '...kk.kk...',
-];
-const SPRITE_W = 11, SPRITE_H = 16, PX = 3;
-
-/* ------------------------------------------------------------------ layout */
-
-const MARGIN = 22;
-const WALL_H = 92;
-const DESK_W = 168, DESK_H = 132, GAP_X = 26, GAP_Y = 22;
-const WORK_PAD = 34;
-const MEET_H = 150;
-const DIVIDER = 34;
-const LOUNGE_W = 404;
-const MIN_ROOM_H = 452;
+const FURNITURE_FOLDER = {
+  DESK_FRONT: 'DESK', PC_FRONT_OFF: 'PC', PC_FRONT_ON_1: 'PC', PC_FRONT_ON_2: 'PC',
+  PC_FRONT_ON_3: 'PC', PC_SIDE: 'PC', WOODEN_CHAIR_SIDE: 'WOODEN_CHAIR',
+  SOFA_FRONT: 'SOFA', SOFA_BACK: 'SOFA', SOFA_SIDE: 'SOFA',
+  SMALL_TABLE_FRONT: 'SMALL_TABLE',
+};
 
 const canvas = document.getElementById('office');
 const ctx = canvas.getContext('2d');
 
 let snapshot = null;
 const actors = new Map();
+const art = { furniture: {}, floors: [], walls: null, chars: [], ready: false };
 const view = { s: 1, ox: 0, oy: 0 };
-let room = null;
+let plan = null;
 let frame = 0;
 
 /* ------------------------------------------------------------------ helpers */
@@ -109,18 +78,6 @@ function hash(str) {
   return h >>> 0;
 }
 
-function palette(id) {
-  const h = hash(id);
-  const hue = h % 360;
-  return {
-    hair: ['#2c2118', '#4a2c1a', '#1b1b22', '#6b4a2a', '#3a2438'][h % 5],
-    skin: ['#e8bd93', '#d09b6c', '#a9744a', '#f0d0ae', '#8a5a3a'][(h >> 3) % 5],
-    shirt: `hsl(${hue} 48% 52%)`,
-    pants: `hsl(${(hue + 30) % 360} 24% 34%)`,
-    shoes: '#2a3340',
-  };
-}
-
 function fmt(n) {
   if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
   if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
@@ -128,18 +85,116 @@ function fmt(n) {
   return String(n | 0);
 }
 
-function sx(x) { return view.ox + x * view.s; }
-function sy(y) { return view.oy + y * view.s; }
+function loadImage(src) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
 
-/** Draw one world-space rectangle, snapped to whole device pixels. */
-function R(x, y, w, h, color) {
-  const x0 = Math.round(sx(x)), y0 = Math.round(sy(y));
-  ctx.fillStyle = color;
-  ctx.fillRect(
-    x0, y0,
-    Math.max(1, Math.round(sx(x + w)) - x0),
-    Math.max(1, Math.round(sy(y + h)) - y0)
-  );
+/* ------------------------------------------------------------------ colorize */
+
+function hslToRgb(h, s, l) {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const hp = (((h % 360) + 360) % 360) / 60;
+  const x = c * (1 - Math.abs((hp % 2) - 1));
+  let r = 0, g = 0, b = 0;
+  if (hp < 1) { r = c; g = x; }
+  else if (hp < 2) { r = x; g = c; }
+  else if (hp < 3) { g = c; b = x; }
+  else if (hp < 4) { g = x; b = c; }
+  else if (hp < 5) { r = x; b = c; }
+  else { r = c; b = x; }
+  const m = l - c / 2;
+  return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
+}
+
+/** Grayscale pattern -> flat hue. Same maths the Pixel Agents editor uses. */
+function colorize(img, tint) {
+  const out = document.createElement('canvas');
+  out.width = img.width;
+  out.height = img.height;
+  const g = out.getContext('2d', { willReadFrequently: true });
+  g.drawImage(img, 0, 0);
+  const data = g.getImageData(0, 0, out.width, out.height);
+  const p = data.data;
+  const sat = tint.s / 100;
+  for (let i = 0; i < p.length; i += 4) {
+    if (p[i + 3] === 0) continue;
+    let l = (0.299 * p[i] + 0.587 * p[i + 1] + 0.114 * p[i + 2]) / 255;
+    if (tint.c !== 0) l = 0.5 + (l - 0.5) * ((100 + tint.c) / 100);
+    if (tint.b !== 0) l += tint.b / 200;
+    l = Math.max(0, Math.min(1, l));
+    const [r, gg, bb] = hslToRgb(tint.h, sat, l);
+    p[i] = r; p[i + 1] = gg; p[i + 2] = bb;
+  }
+  g.putImageData(data, 0, 0);
+  return out;
+}
+
+/* ------------------------------------------------------------------ loading */
+
+async function loadArt() {
+  const names = Object.keys(FURNITURE);
+  const [floors, wall, chars, furn] = await Promise.all([
+    Promise.all([0, 6, 8].map((i) => loadImage(`${ASSETS}/floors/floor_${i}.png`))),
+    loadImage(`${ASSETS}/walls/wall_0.png`),
+    Promise.all([0, 1, 2, 3, 4, 5].map((i) => loadImage(`${ASSETS}/characters/char_${i}.png`))),
+    Promise.all(names.map((n) => loadImage(`${ASSETS}/furniture/${FURNITURE_FOLDER[n] || n}/${n}.png`))),
+  ]);
+
+  art.floors = {
+    carpet: floors[0] ? colorize(floors[0], TINT.carpet) : null,
+    wood: floors[1] ? colorize(floors[1], TINT.wood) : null,
+    tile: floors[2] ? colorize(floors[2], TINT.tile) : null,
+  };
+  art.walls = wall ? colorize(wall, TINT.wall) : null;
+  art.chars = chars.filter(Boolean);
+  names.forEach((n, i) => { if (furn[i]) art.furniture[n] = furn[i]; });
+  art.ready = art.chars.length > 0 && !!art.floors.wood;
+}
+
+/* ------------------------------------------------------------------ drawing */
+
+function px(v) { return Math.round(view.ox + v * view.s); }
+function py(v) { return Math.round(view.oy + v * view.s); }
+
+function blit(img, x, y, w, h, mirror) {
+  if (!img) return;
+  const dx = px(x), dy = py(y);
+  const dw = px(x + w) - dx, dh = py(y + h) - dy;
+  if (mirror) {
+    ctx.save();
+    ctx.translate(dx + dw, dy);
+    ctx.scale(-1, 1);
+    ctx.drawImage(img, 0, 0, dw, dh);
+    ctx.restore();
+  } else {
+    ctx.drawImage(img, dx, dy, dw, dh);
+  }
+}
+
+function blitFrame(img, sxp, syp, sw, sh, x, y, mirror) {
+  if (!img) return;
+  const dx = px(x), dy = py(y);
+  const dw = px(x + sw) - dx, dh = py(y + sh) - dy;
+  if (mirror) {
+    ctx.save();
+    ctx.translate(dx + dw, dy);
+    ctx.scale(-1, 1);
+    ctx.drawImage(img, sxp, syp, sw, sh, 0, 0, dw, dh);
+    ctx.restore();
+  } else {
+    ctx.drawImage(img, sxp, syp, sw, sh, dx, dy, dw, dh);
+  }
+}
+
+function place(name, col, row, mirror) {
+  const size = FURNITURE[name];
+  if (!size) return;
+  blit(art.furniture[name], col * TILE, row * TILE, size[0], size[1], mirror);
 }
 
 function clip(text, maxPx) {
@@ -154,369 +209,306 @@ function clip(text, maxPx) {
   return value.slice(0, lo) + '…';
 }
 
-/* ------------------------------------------------------------------ room plan */
+/* ------------------------------------------------------------------ the plan */
 
-function planRoom(desks) {
+const WORK_PAD = 1;      // interior columns of padding either side of the desks
+const DESK_PITCH = 4;    // 3-tile desk + 1 tile of elbow room
+const LOUNGE_INTERIOR = 8;
+const DECOR_ROW = 0;
+const WALL_ROW = 1;
+const FIRST_DESK_ROW = 3;
+const DESK_ROW_PITCH = 5;
+const MEET_ROWS = 4;
+
+function planOffice(desks) {
   const n = Math.max(desks.length, 1);
   const cols = Math.min(3, n);
   const rows = Math.ceil(n / cols);
 
-  const workW = WORK_PAD * 2 + cols * DESK_W + (cols - 1) * GAP_X;
-  const gridTop = MARGIN + WALL_H + WORK_PAD - 12;
-  const workH = WORK_PAD + rows * (DESK_H + GAP_Y) + MEET_H;
-  const roomH = Math.max(workH, MIN_ROOM_H);
+  const workInterior = Math.max(9, WORK_PAD * 2 + cols * DESK_PITCH - 1);
+  const workX0 = 1;                       // first interior column
+  const midWall = workX0 + workInterior;  // shared wall column
+  const loungeX0 = midWall + 1;
+  const totalCols = loungeX0 + LOUNGE_INTERIOR + 1;
 
-  const workX = MARGIN;
-  const workY = MARGIN + WALL_H;
-  const divX = workX + workW;
+  const meetRow = FIRST_DESK_ROW + rows * DESK_ROW_PITCH + 1;
+  const lastRow = meetRow + MEET_ROWS + 1;
+  const totalRows = lastRow + 1;
 
-  const cellList = desks.map((desk, i) => ({
-    desk,
-    x: workX + WORK_PAD + (i % cols) * (DESK_W + GAP_X),
-    y: gridTop + Math.floor(i / cols) * (DESK_H + GAP_Y),
-    seats: 0,
-  }));
+  const cells = desks.map((desk, i) => {
+    const c = workX0 + WORK_PAD + (i % cols) * DESK_PITCH;
+    const r = FIRST_DESK_ROW + Math.floor(i / cols) * DESK_ROW_PITCH;
+    return { desk, col: c, row: r, benchRow: r + 2, seats: 0 };
+  });
+
+  const doorTop = WALL_ROW + Math.max(3, Math.floor((totalRows - WALL_ROW) / 2) - 1);
 
   return {
-    W: MARGIN * 2 + workW + DIVIDER + LOUNGE_W,
-    H: MARGIN * 2 + WALL_H + roomH,
-    workX, workY, workW, roomH,
-    divX,
-    loungeX: divX + DIVIDER,
-    loungeW: LOUNGE_W,
-    meetY: gridTop + rows * (DESK_H + GAP_Y),
-    doorY: workY + roomH * 0.52,
-    cells: new Map(cellList.map((c) => [c.desk.id, c])),
-    cellList,
+    cols: totalCols, rows: totalRows,
+    W: totalCols * TILE, H: totalRows * TILE,
+    workX0, workInterior, midWall, loungeX0, loungeInterior: LOUNGE_INTERIOR,
+    firstFloorRow: WALL_ROW + 1, lastRow,
+    meetRow, doorTop, doorRows: 3,
+    cells, cellsById: new Map(cells.map((c) => [c.desk.id, c])),
   };
+}
+
+function isWall(col, row) {
+  if (row === WALL_ROW) return true;
+  if (row < WALL_ROW || row > plan.lastRow) return false;
+  if (col === 0 || col === plan.cols - 1) return true;
+  if (col === plan.midWall) return !(row >= plan.doorTop && row < plan.doorTop + plan.doorRows);
+  return false;
 }
 
 /* ------------------------------------------------------------------ scenery */
 
-function drawFloors() {
-  R(0, 0, room.W, room.H, C.void);
-
-  R(room.workX, MARGIN, room.workW, WALL_H, C.wall);
-  R(room.loungeX, MARGIN, room.loungeW, WALL_H, C.wall);
-  R(room.workX, MARGIN, room.workW, 5, C.wallTrim);
-  R(room.loungeX, MARGIN, room.loungeW, 5, C.wallTrim);
-  R(room.workX, MARGIN + WALL_H - 6, room.workW, 6, C.wallBase);
-  R(room.loungeX, MARGIN + WALL_H - 6, room.loungeW, 6, C.wallBase);
-
-  // Work room — wooden planks.
-  R(room.workX, room.workY, room.workW, room.roomH, C.wood);
-  let band = 0;
-  for (let y = room.workY; y < room.workY + room.roomH; y += 22, band++) {
-    R(room.workX, y, room.workW, 2, C.woodLine);
-    const stagger = band % 2 ? 60 : 0;
-    for (let x = room.workX + stagger; x < room.workX + room.workW; x += 120) {
-      R(x, y, 2, 22, C.woodLine);
-    }
-  }
-
-  // Lounge — carpet, with a checkered strip at the front.
-  R(room.loungeX, room.workY, room.loungeW, room.roomH, C.carpet);
-  for (let y = room.workY; y < room.workY + room.roomH; y += 44) {
-    R(room.loungeX, y, room.loungeW, 22, C.carpetAlt);
-  }
-  const tileTop = room.workY + room.roomH - 96;
-  for (let ty = 0; ty < 4; ty++) {
-    for (let tx = 0; tx * 24 < room.loungeW; tx++) {
-      R(
-        room.loungeX + tx * 24, tileTop + ty * 24,
-        Math.min(24, room.loungeW - tx * 24), 24,
-        (tx + ty) % 2 === 0 ? C.tileA : C.tileB
-      );
-    }
-  }
-
-  // Dividing wall with the doorway everyone walks through.
-  R(room.divX, MARGIN, DIVIDER, room.roomH + WALL_H, C.wallTrim);
-  R(room.divX + 4, MARGIN, DIVIDER - 8, room.roomH + WALL_H, C.wall);
-  R(room.divX, room.doorY - 34, DIVIDER, 68, C.void);
-  R(room.divX, room.doorY - 36, DIVIDER, 4, C.wallBase);
-  R(room.divX, room.doorY + 32, DIVIDER, 4, C.wallBase);
-}
-
-function drawBookshelf(x, y, w) {
-  R(x, y, w, 40, C.shelf);
-  R(x, y + 18, w, 3, C.shelfLine);
-  R(x, y + 37, w, 3, C.shelfLine);
-  for (let row = 0; row < 2; row++) {
-    let bx = x + 3, i = 0;
-    while (bx < x + w - 5) {
-      const bw = 4 + (hash(`${x}${row}${i}`) % 3);
-      R(bx, y + 4 + row * 19, bw, 13, BOOKS[(hash(`b${x}${row}${i}`) >> 2) % BOOKS.length]);
-      bx += bw + 2;
-      i++;
+function drawFloor() {
+  for (let row = plan.firstFloorRow; row <= plan.lastRow; row++) {
+    for (let col = 1; col < plan.cols - 1; col++) {
+      if (isWall(col, row)) continue;
+      let img = art.floors.wood;
+      if (col > plan.midWall) {
+        img = row >= plan.lastRow - 1 ? art.floors.tile : art.floors.carpet;
+      } else if (col === plan.midWall) {
+        img = art.floors.wood;
+      }
+      blit(img, col * TILE, row * TILE, TILE, TILE);
     }
   }
 }
 
-function drawHangingPlant(x, y) {
-  R(x + 6, y, 6, 12, C.pot);
-  for (let i = 0; i < 7; i++) {
-    const h = 16 + (hash(`hp${x}${i}`) % 22);
-    const px = x - 5 + i * 4;
-    R(px, y + 8, 3, h, i % 2 ? C.leaf : C.leafLite);
-    R(px - 2, y + 2 + h, 3, 6, C.leaf);
-  }
-}
-
-function drawClock(x, y) {
-  R(x, y, 30, 30, '#e8e4dc');
-  R(x + 2, y + 2, 26, 26, '#fbf7ee');
-  R(x + 14, y + 8, 2, 8, '#c0392b');
-  R(x + 14, y + 14, 8, 2, '#3b3138');
-}
-
-function drawPicture(x, y, w, h) {
-  R(x, y, w, h, C.frame);
-  R(x + 3, y + 3, w - 6, h - 6, C.art);
-  const slot = (w - 12) / 4;
-  for (let i = 0; i < 4; i++) {
-    const bh = 6 + (hash(`pic${x}${i}`) % 12);
-    R(x + 6 + i * slot, y + h - 6 - bh, Math.max(4, slot - 3), bh, BOOKS[(hash(`f${x}${i}`) >> 3) % BOOKS.length]);
-  }
-}
-
-function drawPlant(x, y) {
-  for (let i = 0; i < 6; i++) {
-    const a = -0.95 + i * 0.38;
-    const len = 22 + (hash(`pl${x}${i}`) % 10);
-    for (let t = 0; t < len; t += 3) {
-      R(x + 14 + Math.sin(a) * t, y + 26 - Math.cos(a) * t, 4, 4, i % 2 ? C.leaf : C.leafLite);
+function drawWalls() {
+  if (!art.walls) return;
+  for (let row = WALL_ROW; row <= plan.lastRow; row++) {
+    for (let col = 0; col < plan.cols; col++) {
+      if (!isWall(col, row)) continue;
+      let mask = 0;
+      if (isWall(col, row - 1)) mask |= 1;
+      if (isWall(col + 1, row)) mask |= 2;
+      if (isWall(col, row + 1)) mask |= 4;
+      if (isWall(col - 1, row)) mask |= 8;
+      const sxp = (mask % 4) * 16;
+      const syp = Math.floor(mask / 4) * 32;
+      // Wall pieces are two tiles tall and hang above their own tile.
+      blitFrame(art.walls, sxp, syp, 16, 32, col * TILE, (row - 1) * TILE);
     }
   }
-  R(x + 3, y + 26, 24, 20, C.pot);
-  R(x + 3, y + 26, 24, 4, '#a2603a');
-}
 
-function drawTrashCan(x, y) {
-  R(x, y, 18, 4, C.metal);
-  R(x + 2, y + 4, 14, 18, '#6f7889');
-  R(x + 5, y + 7, 2, 12, C.metal);
-  R(x + 11, y + 7, 2, 12, C.metal);
-}
-
-function drawDesk(cell, busy, needsInput) {
-  const { x, y, desk } = cell;
-  const tint = ORIGIN_COLOR[desk.origin] || ORIGIN_COLOR.unknown;
-
-  R(x + 4, y + 44, DESK_W - 8, 30, C.deskTop);
-  R(x + 4, y + 70, DESK_W - 8, 6, C.deskEdge);
-  R(x + 10, y + 76, 5, 16, C.deskLeg);
-  R(x + DESK_W - 15, y + 76, 5, 16, C.deskLeg);
-
-  const mx = x + DESK_W / 2 - 27, my = y + 6;
-  R(mx, my, 54, 40, C.crt);
-  R(mx, my + 34, 54, 6, C.crtDark);
-  R(mx + 5, my + 5, 44, 26, C.crtOff);
-  if (busy) {
-    R(mx + 5, my + 5, 44, 26, frame % 26 < 13 ? '#4a2a2c' : '#3f2427');
-    for (let i = 0; i < 3; i++) {
-      const w = 8 + ((hash(desk.id + i) + frame) % 30);
-      R(mx + 8, my + 9 + i * 7, Math.min(w, 38), 3, needsInput ? '#e4756a' : C.crtOn);
-    }
-  } else {
-    R(mx + 8, my + 9, 16, 3, '#55444a');
+  // The wall above a doorway hangs down into it. Lay the floor back over the
+  // opening so the door reads as a way through and not a black slot.
+  for (let row = plan.doorTop; row < plan.doorTop + plan.doorRows; row++) {
+    blit(art.floors.wood, plan.midWall * TILE, row * TILE, TILE, TILE);
   }
-  R(mx + 21, my + 40, 12, 5, C.crtDark);
-
-  R(x + DESK_W / 2 - 22, y + 52, 44, 12, C.crt);
-  R(x + DESK_W / 2 - 19, y + 55, 38, 6, C.crtDark);
-
-  // The chair carries the origin colour, so the room reads by model source.
-  R(x + DESK_W / 2 - 20, y + 96, 40, 13, tint);
-  R(x + DESK_W / 2 - 20, y + 107, 40, 4, C.chairDark);
-}
-
-function drawMeetingTable() {
-  const x = room.workX + WORK_PAD + 6;
-  const w = room.workW - WORK_PAD * 2 - 12;
-  const y = room.meetY + 40;
-  const h = 76;
-  const slot = (w - 60) / 2.4;
-
-  for (let i = 0; i < 3; i++) {
-    R(x + 26 + i * slot, y - 26, 30, 22, C.meetSeat);
-    R(x + 26 + i * slot, y - 8, 30, 5, C.meetSeatD);
-  }
-  R(x, y, w, h, C.deskTop);
-  R(x, y + h - 8, w, 8, C.deskEdge);
-  for (let i = 0; i < 3; i++) {
-    R(x + 26 + i * slot, y + h + 4, 30, 22, C.meetSeat);
-    R(x + 26 + i * slot, y + h + 4, 30, 5, C.meetSeatD);
-  }
-  R(x - 26, y + 20, 20, 32, C.meetSeat);
-  R(x + w + 6, y + 20, 20, 32, C.meetSeat);
-
-  drawPlant(room.workX + 8, room.workY + room.roomH - 88);
-  drawTrashCan(room.workX + room.workW - 34, room.workY + room.roomH - 40);
-}
-
-function drawLounge() {
-  const lx = room.loungeX, ly = room.workY;
-  const cx = lx + room.loungeW / 2;
-  const cy = ly + room.roomH * 0.42;
-
-  R(cx - 62, cy - 78, 124, 30, C.sofa);
-  R(cx - 62, cy - 78, 124, 7, C.sofaLite);
-  R(cx - 62, cy - 54, 124, 6, C.sofaDark);
-
-  R(cx - 62, cy + 44, 124, 30, C.sofa);
-  R(cx - 62, cy + 44, 124, 7, C.sofaLite);
-  R(cx - 62, cy + 68, 124, 6, C.sofaDark);
-
-  R(cx - 104, cy - 34, 32, 88, C.sofa);
-  R(cx - 104, cy - 34, 8, 88, C.sofaLite);
-  R(cx + 72, cy - 34, 32, 88, C.sofa);
-  R(cx + 96, cy - 34, 8, 88, C.sofaDark);
-
-  R(cx - 54, cy - 32, 108, 74, C.deskTop);
-  R(cx - 54, cy + 34, 108, 8, C.deskEdge);
-  R(cx - 10, cy - 6, 20, 12, C.metal);
-  R(cx + 8, cy - 2, 9, 4, C.metal);
-
-  drawPlant(lx + 14, ly + 10);
-  drawPlant(lx + room.loungeW - 44, ly + 10);
 }
 
 function drawWallDecor() {
-  const wx = room.workX, lx = room.loungeX;
-  drawHangingPlant(wx + 14, MARGIN + 8);
-  drawBookshelf(wx + 58, MARGIN + 18, 108);
-  drawClock(wx + room.workW / 2 - 15, MARGIN + 22);
-  drawBookshelf(wx + room.workW - 166, MARGIN + 18, 108);
-  drawHangingPlant(wx + room.workW - 32, MARGIN + 8);
+  const w0 = plan.workX0, wi = plan.workInterior;
+  const r = DECOR_ROW;
+  place('HANGING_PLANT', w0, r);
+  place('DOUBLE_BOOKSHELF', w0 + 1, r);
+  place('CLOCK', w0 + Math.floor(wi / 2), r);
+  place('DOUBLE_BOOKSHELF', w0 + wi - 3, r);
+  place('HANGING_PLANT', w0 + wi - 1, r);
 
-  drawPicture(lx + 34, MARGIN + 20, 40, 48);
-  drawPicture(lx + room.loungeW / 2 - 52, MARGIN + 26, 104, 40);
-  drawPicture(lx + room.loungeW - 74, MARGIN + 20, 40, 48);
+  const l0 = plan.loungeX0;
+  place('SMALL_PAINTING', l0 + 1, r);
+  place('LARGE_PAINTING', l0 + 3, r);
+  place('SMALL_PAINTING_2', l0 + 6, r);
+}
+
+function drawStaticFurniture() {
+  const w0 = plan.workX0, wi = plan.workInterior;
+
+  // Meeting table with laptops and chairs down both sides.
+  const tableCol = w0 + Math.max(0, Math.floor((wi - 3) / 2));
+  const tableRow = plan.meetRow;
+  place('WOODEN_CHAIR_SIDE', tableCol - 1, tableRow);
+  place('WOODEN_CHAIR_SIDE', tableCol - 1, tableRow + 2);
+  place('TABLE_FRONT', tableCol, tableRow);
+  place('PC_SIDE', tableCol, tableRow);
+  place('PC_SIDE', tableCol, tableRow + 2);
+  place('PC_SIDE', tableCol + 2, tableRow, true);
+  place('PC_SIDE', tableCol + 2, tableRow + 2, true);
+  place('WOODEN_CHAIR_SIDE', tableCol + 3, tableRow, true);
+  place('WOODEN_CHAIR_SIDE', tableCol + 3, tableRow + 2, true);
+
+  place('PLANT_2', w0, plan.lastRow - 3);
+  place('BIN', w0, plan.lastRow);
+  place('LARGE_PLANT', w0 + wi - 2, plan.lastRow - 3);
+
+  // Lounge.
+  const l0 = plan.loungeX0;
+  const cx = l0 + Math.floor(plan.loungeInterior / 2) - 1;
+  const cy = plan.firstFloorRow + 3;
+  place('SOFA_FRONT', cx, cy);
+  place('SOFA_SIDE', cx - 1, cy + 1);
+  place('COFFEE_TABLE', cx, cy + 1);
+  place('COFFEE', cx, cy + 2);
+  place('SOFA_SIDE', cx + 2, cy + 1, true);
+  place('SOFA_BACK', cx, cy + 3);
+  place('PLANT', l0, plan.firstFloorRow);
+  place('PLANT_2', l0 + plan.loungeInterior - 1, plan.firstFloorRow);
+  place('SMALL_TABLE_FRONT', l0 + plan.loungeInterior - 2, plan.lastRow - 3);
+}
+
+function drawDesks(busy, waiting) {
+  plan.cells.forEach((cell) => {
+    place('DESK_FRONT', cell.col, cell.row);
+    const on = busy.has(cell.desk.id);
+    const name = on
+      ? `PC_FRONT_ON_${1 + (Math.floor(frame / 12) % 3)}`
+      : 'PC_FRONT_OFF';
+    place(name, cell.col + 1, cell.row);
+    place('CUSHIONED_BENCH', cell.col + 1, cell.benchRow);
+    if (waiting.has(cell.desk.id)) {
+      const cx = (cell.col + 1) * TILE + TILE / 2;
+      const cy = cell.row * TILE - 6;
+      ctx.fillStyle = '#e4756a';
+      ctx.fillRect(px(cx - 6), py(cy - 14), px(cx + 6) - px(cx - 6), py(cy) - py(cy - 14));
+      ctx.fillStyle = '#3a1512';
+      ctx.fillRect(px(cx - 1.5), py(cy - 11), Math.max(1, px(cx + 1.5) - px(cx - 1.5)), py(cy - 5) - py(cy - 11));
+      ctx.fillRect(px(cx - 1.5), py(cy - 3.5), Math.max(1, px(cx + 1.5) - px(cx - 1.5)), py(cy - 1.5) - py(cy - 3.5));
+    }
+  });
 }
 
 /* ------------------------------------------------------------------ people */
 
-function seatFor(worker, index) {
-  const cell = worker.desk ? room.cells.get(worker.desk) : null;
-  if (cell) {
-    const n = cell.seats++;
-    return { x: cell.x + DESK_W / 2 + (n ? 34 * (n % 2 ? 1 : -1) : 0), y: cell.y + 108 + (n ? 18 : 0) };
+/* Sheet layout: rows down/up/right, 7 frames of 16x32.
+   0-2 walk · 3-4 typing · 5-6 reading. Left is the mirrored right row. */
+const DIR_ROW = { down: 0, up: 1, right: 2, left: 2 };
+const WALK_CYCLE = [0, 1, 2, 1];
+
+function characterFrame(worker, moving) {
+  if (moving) return WALK_CYCLE[Math.floor(frame / 8) % 4];
+  switch (worker.activity) {
+    case 'typing':
+    case 'running':
+      return 3 + (Math.floor(frame / 10) % 2);
+    case 'reading':
+    case 'browsing':
+      return 5 + (Math.floor(frame / 16) % 2);
+    default:
+      return 0;
   }
-  const cx = room.loungeX + room.loungeW / 2;
-  const cy = room.workY + room.roomH * 0.42;
-  const spots = [
-    { x: cx - 84, y: cy + 100 }, { x: cx + 6, y: cy + 104 }, { x: cx + 86, y: cy + 100 },
-    { x: cx - 84, y: cy - 86 }, { x: cx + 6, y: cy - 92 }, { x: cx + 86, y: cy - 86 },
-  ];
-  return spots[index % spots.length];
 }
 
-function drawSprite(actor, worker) {
-  const pal = palette(worker.id);
-  const act = worker.activity;
-  const walking = Math.abs(actor.tx - actor.x) + Math.abs(actor.ty - actor.y) > 2;
-  const bob = !walking && (act === 'thinking' || act === 'idle') && frame % 64 < 32 ? 1 : 0;
-  const step = walking && frame % 18 < 9;
-  const typing = act === 'typing' && frame % 14 < 7;
-
-  const colors = {
-    h: pal.hair, s: pal.skin, e: '#2a2028', a: pal.skin,
-    b: pal.shirt, p: pal.pants, k: pal.shoes,
-    c: worker.desk ? (ORIGIN_COLOR[worker.origin] || pal.shirt) : pal.shirt,
-  };
-
-  const ox = actor.x - (SPRITE_W * PX) / 2;
-  const oy = actor.y - SPRITE_H * PX + bob;
-
-  if (worker.gone) ctx.globalAlpha = 0.3;
-  R(ox + PX * 2, oy + SPRITE_H * PX, (SPRITE_W - 4) * PX, PX, C.shadow);
-
-  for (let row = 0; row < SPRITE_H; row++) {
-    for (let col = 0; col < SPRITE_W; col++) {
-      const key = SPRITE[row][col];
-      if (key === '.') continue;
-      let dy = row;
-      if (typing && key === 'a') dy += 1;
-      if (step && row >= 13 && col < 5) dy -= 1;
-      R(ox + col * PX, oy + dy * PX, PX, PX, colors[key] || '#888');
-    }
+function seatFor(worker, index) {
+  const cell = worker.desk ? plan.cellsById.get(worker.desk) : null;
+  if (cell) {
+    const n = cell.seats++;
+    return {
+      x: (cell.col + 1) * TILE + TILE / 2 + (n ? (n % 2 ? 18 : -18) : 0),
+      y: cell.benchRow * TILE + TILE + (n ? 14 : 0),
+      dir: 'down',
+      seated: true,
+    };
   }
+  const l0 = plan.loungeX0;
+  const cx = l0 + Math.floor(plan.loungeInterior / 2) - 1;
+  const cy = plan.firstFloorRow + 3;
+  const spots = [
+    { x: (cx + 1) * TILE, y: (cy + 5) * TILE, dir: 'up' },
+    { x: (cx - 1) * TILE + 8, y: (cy + 2) * TILE + 8, dir: 'right' },
+    { x: (cx + 3) * TILE - 8, y: (cy + 2) * TILE + 8, dir: 'left' },
+    { x: (cx + 1) * TILE, y: (cy + 1) * TILE, dir: 'down' },
+    { x: (l0 + 1) * TILE, y: (plan.lastRow - 1) * TILE, dir: 'up' },
+    { x: (l0 + plan.loungeInterior - 2) * TILE, y: (plan.lastRow - 1) * TILE, dir: 'up' },
+  ];
+  return Object.assign({ seated: false }, spots[index % spots.length]);
+}
+
+function drawCharacter(actor, worker) {
+  const sheet = art.chars[hash(worker.id) % art.chars.length];
+  if (!sheet) return;
+  const dx = actor.tx - actor.x, dy = actor.ty - actor.y;
+  const moving = Math.abs(dx) + Math.abs(dy) > 1.5;
+
+  let dir = actor.dir || 'down';
+  if (moving) dir = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
+  else if (actor.rest) dir = actor.rest;
+  actor.dir = dir;
+
+  const f = characterFrame(worker, moving);
+  const sit = !moving && actor.seated ? 6 : 0;
+  const x = actor.x - 8;
+  const y = actor.y + sit - 32;
+
+  if (worker.gone) ctx.globalAlpha = 0.35;
+  blitFrame(sheet, f * 16, DIR_ROW[dir] * 32, 16, 32, x, y, dir === 'left');
   ctx.globalAlpha = 1;
 
-  drawBubble(worker, ox + (SPRITE_W * PX) / 2, oy - 4);
+  drawBubble(worker, actor.x, y - 2);
 }
 
 function drawBubble(worker, cx, cy) {
+  const rect = (x, y, w, h, color) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(px(x), py(y), Math.max(1, px(x + w) - px(x)), Math.max(1, py(y + h) - py(y)));
+  };
   if (worker.needs_input) {
-    R(cx - 11, cy - 26, 22, 22, '#e4756a');
-    R(cx - 4, cy - 5, 8, 6, '#e4756a');
-    R(cx - 2, cy - 22, 4, 11, '#3a1512');
-    R(cx - 2, cy - 9, 4, 4, '#3a1512');
+    rect(cx - 7, cy - 17, 14, 14, '#e4756a');
+    rect(cx - 2, cy - 4, 5, 4, '#e4756a');
+    rect(cx - 1.5, cy - 14, 3, 7, '#3a1512');
+    rect(cx - 1.5, cy - 6, 3, 2.5, '#3a1512');
     return;
   }
-  switch (worker.activity) {
-    case 'thinking':
-      for (let i = 0; i < 3; i++) {
-        if ((Math.floor(frame / 14) % 3) < i) continue;
-        R(cx - 13 + i * 10, cy - 16, 6, 6, '#f0d9a8');
-      }
-      return;
-    case 'reading':
-      R(cx - 12, cy - 19, 24, 16, '#efe9dd');
-      R(cx - 8, cy - 15, 16, 3, '#9aa4b2');
-      R(cx - 8, cy - 10, 11, 3, '#9aa4b2');
-      return;
-    case 'browsing':
-      R(cx - 11, cy - 19, 22, 16, '#1d2b3a');
-      R(cx - 8, cy - 16, 16, 3, '#6fc3e8');
-      R(cx - 8, cy - 11, 9, 3, '#6fc3e8');
-      return;
-    case 'running':
-      R(cx - 12, cy - 19, 24, 16, '#101820');
-      R(cx - 9, cy - 15, frame % 24 < 12 ? 7 : 13, 3, '#4fbb80');
-      R(cx - 9, cy - 10, 5, 3, '#4fbb80');
-      return;
-    default:
+  if (worker.activity === 'thinking') {
+    for (let i = 0; i < 3; i++) {
+      if ((Math.floor(frame / 14) % 3) < i) continue;
+      rect(cx - 9 + i * 7, cy - 11, 4, 4, '#f4e2b4');
+    }
   }
 }
 
 /* ------------------------------------------------------------------ labels */
 
 function drawLabels(workers) {
+  // Fixed type sizes on purpose: the room scales with the window, but a
+  // nameplate that scales with it is either unreadable or absurd.
   ctx.textBaseline = 'top';
   ctx.textAlign = 'center';
 
-  room.cellList.forEach((cell) => {
+  plan.cells.forEach((cell) => {
     const tint = ORIGIN_COLOR[cell.desk.origin] || ORIGIN_COLOR.unknown;
-    const cx = sx(cell.x + DESK_W / 2);
-    const top = sy(cell.y + DESK_H - 12);
-    const width = DESK_W * view.s;
+    const cx = px((cell.col + 1.5) * TILE);
+    const top = py((cell.benchRow + 1) * TILE + 6);
 
-    // A nameplate, so the label reads on a wooden floor instead of fighting it.
-    R(cell.x + 8, cell.y + DESK_H - 16, DESK_W - 16, 40, 'rgba(20,16,25,.78)');
-    R(cell.x + 8, cell.y + DESK_H - 16, 4, 40, tint);
+    ctx.font = '600 12px "IBM Plex Sans Thai", system-ui, sans-serif';
+    const labelW = ctx.measureText(cell.desk.label).width;
+    ctx.font = '10.5px "IBM Plex Mono", ui-monospace, monospace';
+    const modelW = ctx.measureText(cell.desk.model).width;
+    const plate = Math.min(Math.max(96, Math.max(labelW, modelW) + 18), 190);
 
-    ctx.font = `600 ${Math.max(11, 13 * view.s)}px "IBM Plex Sans Thai", system-ui, sans-serif`;
-    ctx.fillStyle = '#f6f1e6';
-    ctx.fillText(clip(cell.desk.label, width), cx, top);
-
-    ctx.font = `${Math.max(10, 11.5 * view.s)}px "IBM Plex Mono", ui-monospace, monospace`;
+    ctx.fillStyle = 'rgba(14,11,18,.84)';
+    ctx.fillRect(cx - plate / 2, top, plate, 33);
     ctx.fillStyle = tint;
-    ctx.fillText(clip(cell.desk.model, width), cx, top + Math.max(15, 17 * view.s));
+    ctx.fillRect(cx - plate / 2, top, 3, 33);
+
+    ctx.font = '600 12px "IBM Plex Sans Thai", system-ui, sans-serif';
+    ctx.fillStyle = '#f6f1e6';
+    ctx.fillText(clip(cell.desk.label, plate - 14), cx + 1, top + 3);
+
+    ctx.font = '10.5px "IBM Plex Mono", ui-monospace, monospace';
+    ctx.fillStyle = tint;
+    ctx.fillText(clip(cell.desk.model, plate - 14), cx + 1, top + 18);
   });
 
   workers.forEach((worker) => {
     const actor = actors.get(worker.id);
     if (!actor || worker.desk) return;
-    const cx = sx(actor.x), top = sy(actor.y + 6);
-    ctx.font = `600 ${Math.max(10, 11.5 * view.s)}px "IBM Plex Sans Thai", system-ui, sans-serif`;
-    ctx.fillStyle = worker.gone ? '#7d8a99' : '#f2f6fa';
-    ctx.fillText(clip(worker.platform || 'session', 160), cx, top);
+    const cx = px(actor.x), top = py(actor.y + 5);
+    ctx.font = '600 11px "IBM Plex Sans Thai", system-ui, sans-serif';
+    const w = Math.min(Math.max(72, ctx.measureText(worker.model || '').width + 14), 180);
+    ctx.fillStyle = 'rgba(14,11,18,.7)';
+    ctx.fillRect(cx - w / 2, top, w, worker.model ? 28 : 15);
+    ctx.fillStyle = worker.gone ? '#8b98a6' : '#f2f6fa';
+    ctx.fillText(clip(worker.platform || 'session', w - 8), cx, top + 1);
     if (worker.model) {
-      ctx.font = `${Math.max(9, 10.5 * view.s)}px "IBM Plex Mono", ui-monospace, monospace`;
-      ctx.fillStyle = '#c7d4e2';
-      ctx.fillText(clip(worker.model, 180), cx, top + Math.max(13, 14 * view.s));
+      ctx.font = '10px "IBM Plex Mono", ui-monospace, monospace';
+      ctx.fillStyle = '#cfdae6';
+      ctx.fillText(clip(worker.model, w - 8), cx, top + 15);
     }
   });
 
@@ -535,43 +527,51 @@ function tick() {
   }
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   ctx.imageSmoothingEnabled = false;
-  ctx.fillStyle = C.void;
+  ctx.fillStyle = '#141019';
   ctx.fillRect(0, 0, cw, ch);
+
+  if (!art.ready) { requestAnimationFrame(tick); return; }
 
   const desks = snapshot ? snapshot.desks : [];
   const workers = snapshot ? snapshot.workers : [];
-  room = planRoom(desks);
+  plan = planOffice(desks);
+  plan.cells.forEach((c) => { c.seats = 0; });
 
-  view.s = Math.min(cw / room.W, ch / room.H);
-  view.ox = (cw - room.W * view.s) / 2;
-  view.oy = (ch - room.H * view.s) / 2;
+  const pad = 12;
+  view.s = Math.max(1, Math.min((cw - pad) / plan.W, (ch - pad) / plan.H, 4));
+  view.ox = (cw - plan.W * view.s) / 2;
+  view.oy = (ch - plan.H * view.s) / 2;
 
-  drawFloors();
+  drawFloor();
+  drawWalls();
   drawWallDecor();
-  drawLounge();
-  if (desks.length) drawMeetingTable();
+  drawStaticFurniture();
 
   const busy = new Set(
     workers.filter((w) => !w.gone && w.desk && w.activity !== 'idle').map((w) => w.desk)
   );
   const waiting = new Set(workers.filter((w) => w.needs_input && w.desk).map((w) => w.desk));
-  room.cellList.forEach((cell) => drawDesk(cell, busy.has(cell.desk.id), waiting.has(cell.desk.id)));
+  drawDesks(busy, waiting);
 
+  const doorX = plan.midWall * TILE + TILE / 2;
+  const doorY = (plan.doorTop + 1) * TILE + TILE;
   const alive = new Set();
   let loose = 0;
   workers.forEach((worker) => {
     alive.add(worker.id);
-    const target = seatFor(worker, worker.desk || worker.gone ? 0 : loose++);
+    const seat = seatFor(worker, worker.desk || worker.gone ? 0 : loose++);
     let actor = actors.get(worker.id);
     if (!actor) {
-      actor = { x: room.divX + DIVIDER / 2, y: room.doorY, tx: target.x, ty: target.y };
+      actor = { x: doorX, y: doorY, tx: seat.x, ty: seat.y, dir: 'down' };
       actors.set(worker.id, actor);
     }
-    actor.tx = worker.gone ? room.divX + DIVIDER / 2 : target.x;
-    actor.ty = worker.gone ? room.doorY : target.y;
-    actor.x += (actor.tx - actor.x) * 0.07;
-    actor.y += (actor.ty - actor.y) * 0.09;
-    drawSprite(actor, worker);
+    actor.tx = worker.gone ? doorX : seat.x;
+    actor.ty = worker.gone ? doorY : seat.y;
+    actor.rest = worker.gone ? 'down' : seat.dir;
+    actor.seated = !worker.gone && seat.seated;
+    actor.x += (actor.tx - actor.x) * 0.06;
+    actor.y += (actor.ty - actor.y) * 0.08;
+    drawCharacter(actor, worker);
   });
   actors.forEach((_, id) => { if (!alive.has(id)) actors.delete(id); });
 
@@ -672,6 +672,8 @@ function connect() {
   };
 }
 
-fetch('/api/state').then((r) => r.json()).then(apply).catch(() => {});
-connect();
+loadArt().then(() => {
+  fetch('/api/state').then((r) => r.json()).then(apply).catch(() => {});
+  connect();
+});
 requestAnimationFrame(tick);

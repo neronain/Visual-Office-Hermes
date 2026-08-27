@@ -4,12 +4,31 @@ Copyright (c) 2026 neronain — https://www.facebook.com/neronain.minidev
 Licensed under the MIT License (see LICENSE). You may fork this and build on it
 commercially; the copyright notice above stays.
 
-This project is an integration layer. It contains no code from the projects
-below, but it is designed against their public interfaces and owes them the
-ideas it is built on:
+
+## Bundled artwork
+
+Everything under `server/web/assets/` — furniture, floor tiles, wall tiles and
+character sprite sheets — is the open-source art set from Pixel Agents:
+
+    Pixel Agents — https://github.com/pixel-agents-hq/pixel-agents
+    Copyright (c) 2026 Pablo De Lucca
+    MIT License — full text in server/web/assets/LICENSE.pixel-agents
+
+The character sprites in that set are based on the free Metro City top-down
+character pack by JIK-A-4:
+
+    https://jik-a-4.itch.io/metrocity-free-topdown-character-pack
+
+The art is redistributed here unmodified. The renderer that draws it
+(`server/web/office.js`) is ours; the colorize maths it uses to tint the
+grayscale floor and wall tiles follows the algorithm in the Pixel Agents editor.
+
+
+## Designed against, no code taken from
 
   - NousResearch/hermes-agent (MIT) — the agent, and the public subagent
     lifecycle API that makes per-desk models possible without a fork.
   - teknium1/hermes-pixel-office — the hook -> event log -> canvas shape.
   - aiunlocked1412/hermes-agent-pixel — the server-discovery and
-    fire-and-forget relay pattern used by the plugin sink.
+    fire-and-forget relay pattern used by the plugin sink, and the route that
+    led us to the Pixel Agents art set.
