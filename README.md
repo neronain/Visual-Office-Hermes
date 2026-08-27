@@ -8,7 +8,7 @@
 กลายเป็นตัวละครนั่งโต๊ะ · แต่ละโต๊ะผูกกับโมเดลของตัวเอง
 งานที่ส่งไปโต๊ะไหน ก็วิ่งด้วยโมเดลของโต๊ะนั้น
 
-**[สถาปัตยกรรม](docs/ARCHITECTURE.md)** · **[รายชื่อโต๊ะ](docs/DESKS.md)** · **[LiteGate — ประตูเดียวหน้า GPU](https://github.com/neronain/AiGatewayLocal)**
+**[วิธีใช้](docs/USAGE.md)** · **[สถาปัตยกรรม](docs/ARCHITECTURE.md)** · **[รายชื่อโต๊ะ](docs/DESKS.md)** · **[LiteGate — ประตูเดียวหน้า GPU](https://github.com/neronain/AiGatewayLocal)**
 
 สร้างและดูแลโดย **neronain** — [facebook.com/neronain.minidev](https://www.facebook.com/neronain.minidev)
 
@@ -156,6 +156,10 @@ desks:
 | `list` | ดูโต๊ะทั้งหมดและลูกน้องที่ยังทำงานอยู่ |
 | `status` | `{"action": "status", "subagent_id": "..."}` |
 | `cancel` | หยุดลูกน้องกลางคัน |
+
+> ⚠️ ติดตั้งหรืออัปเดตปลั๊กอินแล้ว **ต้อง `hermes gateway restart`** ถ้าสั่งงานผ่าน
+> Telegram/Discord — gateway เป็นคนละ process กับ CLI และปลั๊กอินโหลดตอน process
+> เริ่มเท่านั้น · ดู [docs/USAGE.md](docs/USAGE.md)
 
 ### ตัวละครทำอะไรบ้าง
 
