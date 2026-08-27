@@ -1253,6 +1253,10 @@ function saveToken(value) {
   try { localStorage.setItem(TOKEN_KEY, value); } catch (err) { /* fine */ }
 }
 
+let tokenWaiter = null;
+
+/** Ask for the write token in the page, not in a modal browser prompt.
+ *  A viewer on this machine never sees the field at all. */
 async function ensureToken() {
   if (officeToken) return officeToken;
   const stored = loadToken();
@@ -1263,12 +1267,31 @@ async function ensureToken() {
       const body = await res.json();
       if (body.token) { saveToken(body.token); return officeToken; }
     }
-  } catch (err) { /* fall through to asking */ }
-  const typed = window.prompt(
-    'ใส่ token ของห้อง (เซิร์ฟเวอร์พิมพ์ตอนเริ่ม หรือดูใน ~/.hermes/visual-office/server.json)'
-  );
-  if (typed && typed.trim()) { saveToken(typed.trim()); return officeToken; }
-  return null;
+  } catch (err) { /* remote viewer — ask below */ }
+
+  const panel = document.getElementById('say-auth');
+  if (!panel) return null;
+  panel.hidden = false;
+  const field = document.getElementById('say-token');
+  field.focus();
+  if (!tokenWaiter) {
+    tokenWaiter = new Promise((resolve) => {
+      const accept = () => {
+        const value = field.value.trim();
+        if (!value) return;
+        saveToken(value);
+        field.value = '';
+        panel.hidden = true;
+        tokenWaiter = null;
+        resolve(officeToken);
+      };
+      document.getElementById('say-token-save').addEventListener('click', accept);
+      field.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') { event.preventDefault(); accept(); }
+      });
+    });
+  }
+  return tokenWaiter;
 }
 
 const ORIGIN_LABEL = { local: 'เครื่องเรา', cloud: 'คลาวด์', unknown: 'ไม่ระบุ' };
@@ -1541,8 +1564,11 @@ async function sendCommand() {
       if (res.status === 401) {
         officeToken = null;
         try { localStorage.removeItem(TOKEN_KEY); } catch (err) { /* fine */ }
+        sayMessage('token ไม่ถูกต้อง — ใส่ใหม่อีกครั้ง');
+        ensureToken();
+      } else {
+        sayMessage(body.error || `ส่งไม่สำเร็จ (${res.status})`);
       }
-      sayMessage(body.error || `ส่งไม่สำเร็จ (${res.status})`);
     } else {
       box.value = '';
       sayMessage('เข้าคิวแล้ว — ปลั๊กอินจะมารับภายในไม่กี่วินาที', true);

@@ -56,6 +56,15 @@
     </div>
     <textarea id="say-text" rows="3" maxlength="4000"
       placeholder="พิมพ์งานที่อยากให้ทำ เช่น อ่านไฟล์ /etc/os-release แล้วสรุปสองบรรทัด"></textarea>
+    <div class="say-auth" id="say-auth" hidden>
+      <p>เครื่องนี้ไม่ใช่เครื่องเดียวกับเซิร์ฟเวอร์ห้อง จึงต้องใส่ token ครั้งเดียว</p>
+      <div class="say-row">
+        <input type="password" id="say-token" placeholder="token ของห้อง" autocomplete="off">
+        <button type="button" id="say-token-save">จำไว้</button>
+      </div>
+      <p class="say-where">หาได้จาก <code>~/.hermes/visual-office/server.json</code>
+        หรือบรรทัดที่เซิร์ฟเวอร์พิมพ์ตอนเริ่ม</p>
+    </div>
     <p class="say-msg" id="say-msg"></p>
     <ul class="say-log" id="say-log"></ul>
   </section>

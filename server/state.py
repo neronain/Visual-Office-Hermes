@@ -48,6 +48,9 @@ _ACTIVITY_BY_FRAGMENT: tuple[tuple[str, str], ...] = (
     ("vision", "drawing"),
 )
 
+# Events that mean somebody left. Everything else means they are here.
+DEPARTURES = frozenset({"session_end", "session_finalize", "session_reset", "subagent_stop"})
+
 IDLE_AFTER_SECONDS = 90.0
 GONE_AFTER_SECONDS = 40.0    # long enough to watch someone walk out, short enough to empty the room
 # A session that has said nothing for this long is presumed over. Hermes fires
@@ -221,6 +224,14 @@ class Office:
             return
         worker = self._worker(session_id, now)
         worker["updated_at"] = now
+
+        # A session can come back after it was finalized: the gateway resumes an
+        # interrupted session under the same id after a restart. Without this the
+        # worker stays flagged as gone, walks out of the room, and is dropped
+        # forty seconds later — while it is demonstrably still working.
+        if kind not in DEPARTURES and worker.get("ended_at") is not None:
+            worker["ended_at"] = None
+            worker["status"] = "running"
 
         if kind == "session_start":
             worker["platform"] = str(event.get("platform") or worker["platform"])
