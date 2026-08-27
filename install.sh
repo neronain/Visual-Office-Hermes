@@ -126,10 +126,22 @@ step "3/6  ติดตั้งเซิร์ฟเวอร์"
 
 mkdir -p "$PREFIX"
 rm -rf "$PREFIX/web"
-cp "$REPO_DIR/server/visual_office.py" "$REPO_DIR/server/state.py" "$PREFIX/"
+# ทุกไฟล์ .py ไม่ใช่รายชื่อที่พิมพ์ไว้ · เคยพลาดมาแล้ว: roster_file.py ถูกเพิ่มเข้ามาทีหลัง
+# แต่ไม่มีใครแก้บรรทัดนี้ คนที่ติดตั้งใหม่จึงได้เซิร์ฟเวอร์ที่ import ไม่ผ่านตั้งแต่บรรทัดแรก
+find "$REPO_DIR/server" -maxdepth 1 -name '*.py' -exec cp {} "$PREFIX/" \;
 cp -R "$REPO_DIR/server/web" "$PREFIX/web"
 chmod +x "$PREFIX/visual_office.py"
 say "$PREFIX"
+for _need in visual_office.py state.py roster_file.py; do
+  [ -f "$PREFIX/$_need" ] || die "คัดลอก $_need ไม่สำเร็จ — เซิร์ฟเวอร์จะรันไม่ขึ้น"
+done
+
+# พิสูจน์ว่ามัน import ได้จริงตรงนี้เลย ดีกว่าให้ไปเจอตอน start แล้วงงว่าพังตรงไหน
+( cd "$PREFIX" && "$PYTHON" -c 'import visual_office' >/dev/null 2>&1 ) \
+  && say "ตรวจแล้ว: เซิร์ฟเวอร์ import ครบทุกโมดูล" \
+  || die "เซิร์ฟเวอร์ import ไม่ผ่าน — ดูรายละเอียด: cd $PREFIX && $PYTHON -c 'import visual_office'"
+# ตรวจ import แล้วค่อยเก็บกวาด — ไม่งั้น __pycache__ ที่การตรวจสร้างขึ้นจะค้างอยู่ในที่ติดตั้ง
+find "$PREFIX" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 
 # ---------------------------------------------------------------- desks
 
