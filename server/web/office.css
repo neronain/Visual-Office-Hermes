@@ -529,7 +529,7 @@ body {
 .said li {
   border-left: 2px solid var(--line);
   padding: 7px 0 7px 10px;
-  font-size: 12.5px;
+  font-size: var(--said-size, 12.5px);
   line-height: 1.65;
   color: var(--ink-2);
 }
@@ -656,3 +656,15 @@ body.resizing-panel { user-select: none; cursor: col-resize; }
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* ---------- ขนาดตัวหนังสือของแผงคำตอบ ---------- */
+
+/* คำตอบบางอันเป็นตาราง บางอันเป็นโค้ด บางอันเป็นย่อหน้ายาว · ขนาดเดียวอ่านสบายทุกแบบ
+   ไม่มีจริง และคนที่นั่งห่างจอกับคนที่นั่งติดจอก็ต้องการคนละขนาด */
+.said-size { display: inline-flex; gap: 2px; }
+
+/* คำตอบที่ติดมากับแถวคำสั่งเป็นข้อความชุดเดียวกัน — ต้องขยายตามกันไป ไม่งั้นปรับแล้ว
+   ยังเจอตัวเล็กอยู่ดีที่อีกครึ่งหนึ่งของแผง */
+#say-log .answer { font-size: calc(var(--said-size, 12.5px) - 1px); }
+.said .ask       { font-size: calc(var(--said-size, 12.5px) - 1px); }
+.said .meta      { font-size: calc(var(--said-size, 12.5px) - 2px); }

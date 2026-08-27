@@ -1837,6 +1837,45 @@ async function clearSaid() {
   refreshSaid();
 }
 
+/* ปรับขนาดตัวหนังสือของแผงคำตอบ · เก็บไว้ในเบราว์เซอร์เครื่องนั้นเหมือนความกว้างแถบข้าง
+   เพราะเป็นความชอบของคนที่นั่งอยู่หน้าจอนี้ ไม่ใช่ค่าที่ทุกคนควรได้เหมือนกัน */
+const SAID_SIZE_MIN = 10;
+const SAID_SIZE_MAX = 22;
+const SAID_SIZE_DEFAULT = 12.5;
+const SAID_SIZE_KEY = 'visual-office.said-size';
+
+function setSaidSize(px, remember) {
+  const size = Math.max(SAID_SIZE_MIN, Math.min(SAID_SIZE_MAX, Math.round(px * 2) / 2));
+  document.body.style.setProperty('--said-size', size + 'px');
+  if (remember) {
+    try { localStorage.setItem(SAID_SIZE_KEY, String(size)); } catch (err) { /* โหมดส่วนตัว */ }
+  }
+  return size;
+}
+
+function currentSaidSize() {
+  const now = parseFloat(getComputedStyle(document.body).getPropertyValue('--said-size'));
+  return Number.isFinite(now) ? now : SAID_SIZE_DEFAULT;
+}
+
+function wireSaidSize() {
+  let saved = null;
+  try { saved = localStorage.getItem(SAID_SIZE_KEY); } catch (err) { /* โหมดส่วนตัว */ }
+  setSaidSize(saved ? parseFloat(saved) || SAID_SIZE_DEFAULT : SAID_SIZE_DEFAULT, false);
+
+  const step = (delta) => setSaidSize(currentSaidSize() + delta, true);
+  const smaller = document.getElementById('said-smaller');
+  const bigger = document.getElementById('said-bigger');
+  if (smaller) {
+    smaller.addEventListener('click', () => step(-1));
+    smaller.addEventListener('dblclick', () => setSaidSize(SAID_SIZE_DEFAULT, true));
+  }
+  if (bigger) {
+    bigger.addEventListener('click', () => step(1));
+    bigger.addEventListener('dblclick', () => setSaidSize(SAID_SIZE_DEFAULT, true));
+  }
+}
+
 function wireSay() {
   const button = document.getElementById('say-send');
   if (!button) return;
@@ -2022,6 +2061,7 @@ function wirePanelGrip() {
 
 wireZoom();
 wirePanelGrip();
+wireSaidSize();
 wirePlates();
 wirePets();
 wireEditor();
