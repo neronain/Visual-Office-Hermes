@@ -1713,10 +1713,44 @@ async function sendCommand() {
   refreshSayLog();
 }
 
+/* แผงคำตอบยาวขึ้นเรื่อย ๆ จนหาของใหม่ไม่เจอ · เก็บในหน่วยความจำอยู่แล้ว การล้าง
+   จึงไม่แตะดิสก์และไม่กระทบตัวเลขที่นับสะสมไว้ — แค่ทำให้หน้าจอโล่ง */
+async function clearSaid() {
+  const button = document.getElementById('clear-said');
+  const token = await ensureToken();
+  if (!token) { sayMessage('ต้องมี token ถึงจะล้างได้'); return; }
+
+  button.disabled = true;
+  try {
+    const res = await fetch('/api/said/clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: '{}',
+    });
+    if (res.status === 401) {
+      officeToken = null;
+      try { localStorage.removeItem(TOKEN_KEY); } catch (err) { /* fine */ }
+      sayMessage('token ไม่ถูกต้อง — ใส่ใหม่อีกครั้ง');
+      ensureToken();
+    } else if (!res.ok) {
+      sayMessage(`ล้างไม่สำเร็จ (${res.status})`);
+    } else {
+      const body = await res.json();
+      sayMessage(`ล้างแล้ว ${body.cleared} รายการ`, true);
+    }
+  } catch (err) {
+    sayMessage('ต่อเซิร์ฟเวอร์ไม่ได้');
+  }
+  button.disabled = false;
+  refreshSaid();
+}
+
 function wireSay() {
   const button = document.getElementById('say-send');
   if (!button) return;
   button.addEventListener('click', sendCommand);
+  const clear = document.getElementById('clear-said');
+  if (clear) clear.addEventListener('click', clearSaid);
   document.getElementById('say-text').addEventListener('keydown', (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
       event.preventDefault();

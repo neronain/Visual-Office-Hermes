@@ -384,6 +384,17 @@ class Office:
         with self._lock:
             return [dict(row) for row in self.transcript[-limit:][::-1]]
 
+    def forget_said(self) -> int:
+        """ทิ้งคำตอบที่เก็บไว้ทั้งหมด แล้วบอกว่าทิ้งไปกี่รายการ
+
+        แผงนี้เก็บเฉพาะในหน่วยความจำอยู่แล้ว การล้างจึงไม่แตะอะไรบนดิสก์ และไม่กระทบ
+        ตัวเลขที่นับสะสมไว้ — คนกดล้างอยากได้หน้าจอที่โล่ง ไม่ได้อยากลบประวัติการใช้งาน
+        """
+        with self._lock:
+            count = len(self.transcript)
+            self.transcript.clear()
+            return count
+
     def _apply_roster(self, roster: dict[str, Any], announced_at: float) -> None:
         # The event's own timestamp, not wall-clock: replaying the log on start
         # must not make an old announcement look like it just happened, or the

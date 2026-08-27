@@ -11,6 +11,7 @@ Routes
   GET  /api/command/next    the plugin pulls one queued task (Bearer token)
   GET  /api/command/log     what was sent and how it went
   GET  /api/said            recent replies and approval questions (memory only)
+POST /api/said/clear      empty that list (Bearer token)
   GET  /api/desks     the desk roster; PUT to rewrite it (Bearer token)
   GET  /api/state     the folded office snapshot
   GET  /api/stream    the same snapshot, pushed over SSE
@@ -275,11 +276,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
-        if path not in ("/api/events", "/api/command", "/api/command/result"):
+        if path not in ("/api/events", "/api/command", "/api/command/result",
+                        "/api/said/clear"):
             self._json(404, {"error": "not found"})
             return
         if not self._authorized():
             self._json(401, {"error": "bad or missing bearer token"})
+            return
+        if path == "/api/said/clear":
+            self._json(200, {"ok": True, "cleared": self.app.office.forget_said()})
             return
         if path == "/api/command":
             self._handle_command_post()
