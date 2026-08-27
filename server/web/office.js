@@ -1222,6 +1222,7 @@ function renderPanel(snap) {
   document.getElementById('problems-wrap').hidden = problems.length === 0;
   document.getElementById('problems').innerHTML = problems.map((p) => `<li>${esc(p)}</li>`).join('');
 
+  renderSayDesks(snap.desks);
   document.getElementById('roster-source').textContent = snap.office.roster_source || '';
   const up = snap.office.uptime_seconds || 0;
   document.getElementById('uptime').textContent =
@@ -1471,6 +1472,102 @@ function wireEditor() {
   });
 }
 
+
+/* ------------------------------------------------------------------ commands */
+
+/* Typing a task here does not reach Hermes directly — nothing outside a turn
+ * can launch a subagent, because a launch needs the parent agent bound to the
+ * calling context. What works from outside is a message into a live session,
+ * which Hermes then runs like any other. So the page queues the task, the
+ * plugin pulls it on its next poll and injects it, and the room shows the work
+ * happening the same way it shows anything else. */
+
+function sayMessage(text, ok) {
+  const el = document.getElementById('say-msg');
+  el.textContent = text || '';
+  el.classList.toggle('ok', !!ok);
+}
+
+function renderSayDesks(desks) {
+  const select = document.getElementById('say-desk');
+  if (!select) return;
+  const chosen = select.value;
+  const wanted = ['', ...desks.map((d) => d.id)].join('|');
+  if (select.dataset.shape === wanted) return;
+  select.dataset.shape = wanted;
+  select.innerHTML = '<option value="">— ตัวหลัก —</option>'
+    + desks.map((d) => `<option value="${esc(d.id)}">โต๊ะ ${esc(d.label)}</option>`).join('');
+  if (chosen) select.value = chosen;
+}
+
+function renderSayLog(rows) {
+  const host = document.getElementById('say-log');
+  if (!host) return;
+  host.innerHTML = rows.slice(0, 5).map((row) => {
+    const where = row.desk ? `โต๊ะ ${esc(row.desk)}` : 'ตัวหลัก';
+    const state = row.state === 'done' ? '' : row.state === 'failed' ? ` — ${esc(row.error || 'ส่งไม่สำเร็จ')}`
+      : row.state === 'sent' ? ' — ส่งแล้ว รอ Hermes' : ' — รอปลั๊กอินมารับ';
+    return `<li class="${esc(row.state)}"><span class="where">${where}</span> `
+      + `<span class="what">${esc(row.text.slice(0, 90))}</span>${state}</li>`;
+  }).join('');
+}
+
+async function refreshSayLog() {
+  try {
+    const body = await (await fetch('/api/command/log')).json();
+    renderSayLog(body.commands || []);
+  } catch (err) { /* the panel is a convenience, not a source of truth */ }
+}
+
+async function sendCommand() {
+  const button = document.getElementById('say-send');
+  const box = document.getElementById('say-text');
+  const text = box.value.trim();
+  if (!text) { sayMessage('ยังไม่ได้พิมพ์อะไร'); return; }
+
+  const token = await ensureToken();
+  if (!token) { sayMessage('ต้องมี token ถึงจะสั่งงานได้'); return; }
+
+  button.disabled = true;
+  sayMessage('กำลังส่ง…');
+  try {
+    const res = await fetch('/api/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ text, desk: document.getElementById('say-desk').value }),
+    });
+    const body = await res.json();
+    if (!res.ok) {
+      if (res.status === 401) {
+        officeToken = null;
+        try { localStorage.removeItem(TOKEN_KEY); } catch (err) { /* fine */ }
+      }
+      sayMessage(body.error || `ส่งไม่สำเร็จ (${res.status})`);
+    } else {
+      box.value = '';
+      sayMessage('เข้าคิวแล้ว — ปลั๊กอินจะมารับภายในไม่กี่วินาที', true);
+    }
+  } catch (err) {
+    sayMessage('ต่อเซิร์ฟเวอร์ไม่ได้');
+  }
+  button.disabled = false;
+  refreshSayLog();
+}
+
+function wireSay() {
+  const button = document.getElementById('say-send');
+  if (!button) return;
+  button.addEventListener('click', sendCommand);
+  document.getElementById('say-text').addEventListener('keydown', (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+      event.preventDefault();
+      sendCommand();
+    }
+  });
+  refreshSayLog();
+  setInterval(refreshSayLog, 4000);
+}
+
 /* ------------------------------------------------------------------ feed */
 
 function setLink(state, title) {
@@ -1514,6 +1611,7 @@ wireZoom();
 wirePlates();
 wirePets();
 wireEditor();
+wireSay();
 loadArt().then(() => {
   fetch('/api/state').then((r) => r.json()).then(apply).catch(() => {});
   connect();

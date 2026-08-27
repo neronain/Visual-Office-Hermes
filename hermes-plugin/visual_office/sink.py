@@ -86,6 +86,25 @@ class Sink:
         except queue.Full:
             pass
 
+    def get_json(self, path: str, timeout: float = 5.0) -> Optional[dict]:
+        """GET one JSON object from the office, or None. Never raises."""
+        cfg = self.resolve()
+        if cfg is None:
+            return None
+        url, token = cfg
+        try:
+            req = urllib.request.Request(
+                f"{url}{path}", headers={"Authorization": f"Bearer {token}"}
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                if resp.status == 204:
+                    return None
+                body = resp.read().decode("utf-8", "replace")
+            return json.loads(body) if body.strip() else None
+        except Exception as exc:
+            logger.debug("visual_office get failed: %s", exc)
+            return None
+
     def post_now(self, path: str, payload: dict[str, Any], timeout: float = 3.0) -> Optional[dict]:
         """Synchronous POST for the rare call that wants an answer (roster sync)."""
         cfg = self.resolve()

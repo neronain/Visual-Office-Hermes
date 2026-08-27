@@ -7,6 +7,10 @@ build step or a node_modules tree would make both harder than the thing is worth
 
 Routes
   POST /api/events    ingest one event (Bearer token)
+  POST /api/command   queue a task typed into the office page (Bearer token)
+  GET  /api/command/next    the plugin pulls one queued task (Bearer token)
+  GET  /api/command/log     what was sent and how it went
+  GET  /api/desks     the desk roster; PUT to rewrite it (Bearer token)
   GET  /api/state     the folded office snapshot
   GET  /api/stream    the same snapshot, pushed over SSE
   GET  /healthz       liveness
@@ -122,6 +126,12 @@ class Server:
         # it back to the editor would drop desks the user just added.
         self.written: dict | None = None
         self.written_at = 0.0
+        # Commands typed into the office page, waiting for the plugin to pull
+        # them. The server cannot talk to Hermes; the plugin polls.
+        self.commands: list[dict] = []
+        self.command_log: list[dict] = []
+        self.command_seq = 0
+        self.command_lock = threading.Lock()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -164,6 +174,59 @@ class Handler(BaseHTTPRequestHandler):
         return False
 
     # -- routes -------------------------------------------------------------
+
+    def _handle_command_post(self) -> None:
+        body = self._read_json()
+        if body is None:
+            return
+        text = str(body.get("text") or "").strip()
+        desk = str(body.get("desk") or "").strip()
+        if not text:
+            self._json(400, {"error": "ต้องมีข้อความสั่งงาน"})
+            return
+        if len(text) > 4000:
+            self._json(400, {"error": "ข้อความยาวเกิน 4000 ตัวอักษร"})
+            return
+
+        with self.app.command_lock:
+            self.app.command_seq += 1
+            command = {
+                "id": self.app.command_seq,
+                "text": text,
+                "desk": desk,
+                "queued_at": time.time(),
+                "state": "queued",
+            }
+            self.app.commands.append(command)
+            self.app.command_log.append(dict(command))
+            del self.app.command_log[:-20]
+        self._json(202, {"ok": True, "id": command["id"], "queued": len(self.app.commands)})
+
+    def _handle_command_next(self) -> None:
+        with self.app.command_lock:
+            command = self.app.commands.pop(0) if self.app.commands else None
+            if command:
+                command["state"] = "sent"
+                for row in self.app.command_log:
+                    if row["id"] == command["id"]:
+                        row["state"] = "sent"
+        if command is None:
+            self._send(204, b"", "application/json; charset=utf-8")
+            return
+        self._json(200, command)
+
+    def _handle_command_result(self) -> None:
+        body = self._read_json()
+        if body is None:
+            return
+        with self.app.command_lock:
+            for row in self.app.command_log:
+                if row["id"] == body.get("id"):
+                    row["state"] = "done" if body.get("ok") else "failed"
+                    row["error"] = str(body.get("error") or "")
+                    row["platform"] = str(body.get("platform") or "")
+                    row["done_at"] = time.time()
+        self._json(200, {"ok": True})
 
     def do_PUT(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
@@ -211,11 +274,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
-        if path != "/api/events":
+        if path not in ("/api/events", "/api/command", "/api/command/result"):
             self._json(404, {"error": "not found"})
             return
         if not self._authorized():
             self._json(401, {"error": "bad or missing bearer token"})
+            return
+        if path == "/api/command":
+            self._handle_command_post()
+            return
+        if path == "/api/command/result":
+            self._handle_command_result()
             return
 
         event = self._read_json()
@@ -237,6 +306,14 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, self.app.office.snapshot())
         elif path == "/api/desks":
             self._json(200, self._desks_payload())
+        elif path == "/api/command/next":
+            if not self._authorized():
+                self._json(401, {"error": "bad or missing bearer token"})
+                return
+            self._handle_command_next()
+        elif path == "/api/command/log":
+            with self.app.command_lock:
+                self._json(200, {"commands": list(reversed(self.app.command_log))})
         elif path == "/api/token":
             # The desk editor needs the write token. Hand it over only to a
             # client on this machine — anyone else has to have been told it.
@@ -400,6 +477,22 @@ class Handler(BaseHTTPRequestHandler):
             return
 
 
+def reuse_token(state_dir: Path) -> str:
+    """Keep the same token across restarts.
+
+    A fresh token every start means every browser that is not on this machine
+    has to be told the new one again — for a monitor that gets restarted
+    whenever it is updated, that is a lot of friction for no gain. The file is
+    0600 and the token is still required to write.
+    """
+    try:
+        data = json.loads((state_dir / "server.json").read_text(encoding="utf-8"))
+        token = str(data.get("token") or "").strip()
+        return token if len(token) >= 16 else ""
+    except Exception:
+        return ""
+
+
 def write_discovery(state_dir: Path, host: str, port: int, token: str, url: str) -> Path:
     state_dir.mkdir(parents=True, exist_ok=True)
     path = state_dir / "server.json"
@@ -445,7 +538,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     state_dir = Path(args.state_dir).expanduser() if args.state_dir else default_state_dir()
-    token = args.token.strip() or secrets.token_urlsafe(24)
+    token = args.token.strip() or reuse_token(state_dir) or secrets.token_urlsafe(24)
 
     office = Office()
     log = EventLog(state_dir / "events.jsonl")
@@ -480,11 +573,9 @@ def main(argv: list[str] | None = None) -> int:
         print("\nVisual Office stopped.")
     finally:
         httpd.server_close()
-        if discovery:
-            try:
-                discovery.unlink()
-            except OSError:
-                pass
+        # The discovery file is deliberately left in place: it carries the token
+        # that browsers have already been given, and the plugin treats a
+        # connection refusal as "office is down" anyway.
     return 0
 
 

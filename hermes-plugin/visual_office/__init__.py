@@ -43,6 +43,14 @@ _HANDLES: dict[str, Any] = {}
 _HANDLES_LOCK = threading.Lock()
 _CTX: Any = None
 
+# Live gateway sessions we could inject a message into, newest first. Captured
+# from the session context during hooks — the office page has no other way to
+# learn a session key, and injecting needs one.
+_SESSIONS: dict[str, dict[str, Any]] = {}
+_SESSIONS_LOCK = threading.Lock()
+_COMMAND_THREAD: Optional[threading.Thread] = None
+COMMAND_POLL_SECONDS = 2.0
+
 
 # ---------------------------------------------------------------------------
 # Roster
@@ -135,6 +143,7 @@ def _emit(event: str, **fields: Any) -> None:
 
 
 def on_session_start(**kw: Any) -> None:
+    _remember_session(kw.get("session_id"), kw.get("platform"))
     _announce_roster()
     _emit(
         "session_start",
@@ -169,6 +178,7 @@ def on_pre_llm_call(**kw: Any) -> None:
     # definitions are rebuilt per call, so a desk added a second ago is usable
     # on the very next message rather than after a restart.
     _refresh()
+    _remember_session(kw.get("session_id"), kw.get("platform"))
     _emit(
         "thinking",
         session_id=kw.get("session_id"),
@@ -255,6 +265,112 @@ def on_subagent_stop(**kw: Any) -> None:
         summary=kw.get("child_summary"),
         duration_ms=kw.get("duration_ms"),
     )
+
+
+
+
+# ---------------------------------------------------------------------------
+# Commands from the office page
+# ---------------------------------------------------------------------------
+
+
+def _remember_session(session_id: Any, platform: Any = None) -> None:
+    """Note the live session key for this session, if the gateway bound one.
+
+    A subagent launch needs an active parent bound to the calling context, which
+    a background thread does not have. So a command from the web page is
+    delivered the only way that works from outside a turn: as a message into a
+    live session, which Hermes then runs normally.
+    """
+    sid = str(session_id or "")
+    if not sid:
+        return
+    try:
+        from gateway.session_context import get_session_env
+
+        key = get_session_env("HERMES_SESSION_KEY", "")
+    except Exception:
+        key = ""
+    with _SESSIONS_LOCK:
+        entry = _SESSIONS.setdefault(sid, {})
+        entry["at"] = time.time()
+        if key:
+            entry["key"] = key
+        if platform:
+            entry["platform"] = str(platform)
+
+
+def _newest_session() -> Optional[dict[str, Any]]:
+    with _SESSIONS_LOCK:
+        live = [e for e in _SESSIONS.values() if e.get("key")]
+    return max(live, key=lambda e: e["at"]) if live else None
+
+
+def _command_text(command: dict[str, Any]) -> str:
+    text = str(command.get("text") or "").strip()
+    desk = str(command.get("desk") or "").strip()
+    if not desk:
+        return text
+    return (
+        f"ใช้เครื่องมือ office_delegate ส่งงานนี้ไปที่โต๊ะ {desk} "
+        f"แล้วรายงานผลกลับมา · งาน: {text}"
+    )
+
+
+def _run_command(command: dict[str, Any]) -> None:
+    command_id = command.get("id")
+    result: dict[str, Any] = {"id": command_id}
+
+    if _CTX is None:
+        result.update(ok=False, error="ปลั๊กอินยังไม่พร้อม")
+    else:
+        session = _newest_session()
+        if session is None:
+            result.update(
+                ok=False,
+                error="ยังไม่มี session ที่ส่งข้อความเข้าไปได้ — คุยกับ Hermes สักครั้งก่อน "
+                "(ผ่าน Telegram หรือ CLI) แล้วลองใหม่",
+            )
+        else:
+            try:
+                sent = bool(_CTX.inject_message(_command_text(command), session_key=session["key"]))
+            except Exception as exc:  # pragma: no cover - defensive
+                sent = False
+                result["error"] = str(exc)
+            if sent:
+                result.update(ok=True, platform=session.get("platform", ""))
+            else:
+                result.setdefault(
+                    "error",
+                    "Hermes ปฏิเสธการส่งข้อความ — ส่วนใหญ่คือยังไม่ได้เปิดสิทธิ์ "
+                    "plugins.entries.visual_office.allow_gateway_injection: true "
+                    "ใน ~/.hermes/config.yaml (ดู log ของ Hermes ประกอบ)",
+                )
+                result["ok"] = False
+
+    _SINK.post_now("/api/command/result", result)
+    logger.info("visual_office command %s -> %s", command_id, result.get("ok"))
+
+
+def _command_loop() -> None:
+    while True:
+        time.sleep(COMMAND_POLL_SECONDS)
+        try:
+            command = _SINK.get_json("/api/command/next")
+            if command and command.get("text"):
+                _run_command(command)
+        except Exception:  # pragma: no cover - a poller must never die
+            logger.debug("visual_office command poll failed", exc_info=True)
+
+
+def _start_command_loop() -> None:
+    global _COMMAND_THREAD
+    if _COMMAND_THREAD is not None and _COMMAND_THREAD.is_alive():
+        return
+    _COMMAND_THREAD = threading.Thread(
+        target=_command_loop, name="visual-office-commands", daemon=True
+    )
+    _COMMAND_THREAD.start()
 
 
 # ---------------------------------------------------------------------------
@@ -589,6 +705,7 @@ def register(ctx) -> None:
     roster = _roster(refresh=True)
     _sync_tool(roster)
     _announce_roster()
+    _start_command_loop()
     logger.info(
         "visual_office ready — %d desk(s) from %s", len(roster.desks), roster.source
     )

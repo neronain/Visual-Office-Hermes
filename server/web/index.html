@@ -46,6 +46,20 @@
     <h2>ใช้ไปกับโมเดลอะไร</h2>
     <ul class="models" id="models"><li class="muted">ยังไม่มีการเรียกโมเดล</li></ul>
   </section>
+  <section class="say">
+    <h2>สั่งงาน</h2>
+    <div class="say-row">
+      <select id="say-desk" aria-label="ส่งไปที่">
+        <option value="">— ตัวหลัก —</option>
+      </select>
+      <button type="button" id="say-send" title="ส่ง (Ctrl+Enter)">ส่ง</button>
+    </div>
+    <textarea id="say-text" rows="3" maxlength="4000"
+      placeholder="พิมพ์งานที่อยากให้ทำ เช่น อ่านไฟล์ /etc/os-release แล้วสรุปสองบรรทัด"></textarea>
+    <p class="say-msg" id="say-msg"></p>
+    <ul class="say-log" id="say-log"></ul>
+  </section>
+
   <section id="problems-wrap" hidden>
     <h2>ปัญหาของรายชื่อโต๊ะ</h2>
     <ul class="problems" id="problems"></ul>

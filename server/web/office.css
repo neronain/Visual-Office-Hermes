@@ -434,3 +434,62 @@ body {
   .ed-desk { grid-template-columns: 1fr 34px; }
   .ed-desk .wide { grid-column: 1 / -1; }
 }
+
+
+/* ---------- command bar ---------- */
+
+.say-row { display: flex; gap: 8px; margin-bottom: 8px; }
+
+.say-row select {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--ground);
+  border: 1px solid var(--line);
+  padding: 6px 8px;
+}
+
+.say-row button {
+  appearance: none;
+  border: 1px solid var(--lamp);
+  background: transparent;
+  color: var(--lamp);
+  font-family: var(--font);
+  font-size: 13px;
+  padding: 6px 18px;
+  cursor: pointer;
+}
+.say-row button:hover { background: rgba(232, 163, 61, .12); }
+.say-row button:disabled { opacity: .45; cursor: default; }
+
+#say-text {
+  width: 100%;
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ink);
+  background: var(--ground);
+  border: 1px solid var(--line);
+  padding: 8px;
+  resize: vertical;
+}
+#say-text:focus, .say-row select:focus { outline: none; border-color: var(--lamp); }
+#say-text::placeholder { color: #55636f; }
+
+.say-msg { margin: 8px 0 0; font-size: 12px; color: var(--alert); min-height: 1em; }
+.say-msg.ok { color: var(--local); }
+
+.say-log { margin-top: 10px; gap: 6px; }
+.say-log li {
+  font-size: 12px;
+  color: var(--muted);
+  border-left: 2px solid var(--line);
+  padding-left: 9px;
+  line-height: 1.5;
+}
+.say-log li.done   { border-left-color: var(--local); }
+.say-log li.failed { border-left-color: var(--alert); color: var(--alert); }
+.say-log .what { color: var(--ink-2); overflow-wrap: anywhere; }
+.say-log .where { font-family: var(--mono); font-size: 11px; color: var(--lamp); }
