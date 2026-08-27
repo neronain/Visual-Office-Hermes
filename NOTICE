@@ -7,8 +7,9 @@ commercially; the copyright notice above stays.
 
 ## Bundled artwork
 
-Everything under `server/web/assets/` — furniture, floor tiles, wall tiles and
-character sprite sheets — is the open-source art set from Pixel Agents:
+Everything under `server/web/assets/` — furniture, floor tiles, wall tiles, carpet
+tiles, pet sprites and character sprite sheets — is the open-source art set from
+Pixel Agents (taken from v1.4.1):
 
     Pixel Agents — https://github.com/pixel-agents-hq/pixel-agents
     Copyright (c) 2026 Pablo De Lucca

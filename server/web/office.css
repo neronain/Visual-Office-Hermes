@@ -151,7 +151,9 @@ body {
 .zoom #zoom-fit,
 .zoom .sep { font-family: var(--font); font-size: 12px; }
 .zoom .sep { border-left: 1px solid var(--line); color: var(--muted); }
-.zoom .sep[aria-pressed="true"] { color: var(--lamp); }
+.zoom .sep[aria-pressed="true"],
+.zoom #toggle-pets[aria-pressed="true"] { color: var(--lamp); }
+.zoom #toggle-pets { font-family: var(--font); font-size: 12px; color: var(--muted); }
 
 .zoom #zoom-level {
   display: flex;

@@ -31,7 +31,13 @@ const TINT = {
   carpet: { h: 209, s: 39, b: -25,  c: -80 },
   tile:   { h: 209, s: 0,  b: -16,  c: -8 },
   wall:   { h: 214, s: 30, b: -100, c: -55 },
+  rug:    { h: 348, s: 42, b: -34,  c: -70 },
 };
+
+/* Office pets. Sheet is 96x96: row 0 down, row 1 up (six 16-wide frames each,
+   walk 0-2 then idle 3-5), row 2 right (three 32-wide walk frames). Left is
+   the mirrored right row. */
+const PETS = ['claudio', 'gitcat'];
 
 const ORIGIN_COLOR = { local: '#4fbb80', cloud: '#e8a33d', unknown: '#b6c0cc' };
 
@@ -62,7 +68,7 @@ const ctx = canvas.getContext('2d');
 
 let snapshot = null;
 const actors = new Map();
-const art = { furniture: {}, floors: [], walls: null, chars: [], ready: false };
+const art = { furniture: {}, floors: [], walls: null, chars: [], carpet: null, pets: [], ready: false };
 /* Pixel art only survives whole-number zoom — a fractional scale smears every
    sprite edge, which is exactly the "แตกๆ" look. So the scale is always an
    integer, and the +/- buttons step it rather than sliding it. */
@@ -143,11 +149,13 @@ function colorize(img, tint) {
 
 async function loadArt() {
   const names = Object.keys(FURNITURE);
-  const [floors, wall, chars, furn] = await Promise.all([
+  const [floors, wall, chars, furn, carpet, pets] = await Promise.all([
     Promise.all([0, 6, 8].map((i) => loadImage(`${ASSETS}/floors/floor_${i}.png`))),
     loadImage(`${ASSETS}/walls/wall_0.png`),
     Promise.all([0, 1, 2, 3, 4, 5].map((i) => loadImage(`${ASSETS}/characters/char_${i}.png`))),
     Promise.all(names.map((n) => loadImage(`${ASSETS}/furniture/${FURNITURE_FOLDER[n] || n}/${n}.png`))),
+    loadImage(`${ASSETS}/carpets/carpet_1.png`),
+    Promise.all(PETS.map((name) => loadImage(`${ASSETS}/pets/${name}/pet.png`))),
   ]);
 
   art.floors = {
@@ -156,7 +164,9 @@ async function loadArt() {
     tile: floors[2] ? colorize(floors[2], TINT.tile) : null,
   };
   art.walls = wall ? colorize(wall, TINT.wall) : null;
+  art.carpet = carpet ? colorize(carpet, TINT.rug) : null;
   art.chars = chars.filter(Boolean);
+  art.pets = pets.filter(Boolean);
   names.forEach((n, i) => { if (furn[i]) art.furniture[n] = furn[i]; });
   art.ready = art.chars.length > 0 && !!art.floors.wood;
 }
@@ -290,8 +300,9 @@ function planOffice(desks) {
   add('LARGE_PAINTING', loungeX0 + 3, DECOR_ROW);
   add('SMALL_PAINTING_2', loungeX0 + 6, DECOR_ROW);
 
-  // Meeting table.
+  // Meeting table, on a rug.
   const tableCol = workX0 + Math.max(0, Math.floor((workInterior - 3) / 2));
+  plan.rug = [tableCol - 1, meetRow, tableCol + 3, meetRow + MEET_ROWS - 1];
   add('TABLE_FRONT', tableCol, meetRow);
   add('PC_SIDE', tableCol, meetRow);
   add('PC_SIDE', tableCol, meetRow + 2);
@@ -461,7 +472,28 @@ function pcSprite(busy) {
   return busy ? `PC_FRONT_ON_${1 + (Math.floor(frame / 12) % 3)}` : 'PC_FRONT_OFF';
 }
 
+/* A rug is auto-tiled with marching squares: each tile sits on the junction of
+   four cells, and the 4-bit case says which of them are rug. NW=1 NE=2 SE=4 SW=8,
+   laid out four to a row in the source image. */
+function drawRug(col0, row0, col1, row1) {
+  if (!art.carpet) return;
+  const inside = (c, r) => c >= col0 && c <= col1 && r >= row0 && r <= row1;
+  for (let r = row0; r <= row1 + 1; r++) {
+    for (let c = col0; c <= col1 + 1; c++) {
+      let mask = 0;
+      if (inside(c - 1, r - 1)) mask |= 1;
+      if (inside(c, r - 1)) mask |= 2;
+      if (inside(c, r)) mask |= 4;
+      if (inside(c - 1, r)) mask |= 8;
+      if (!mask) continue;
+      blitFrame(art.carpet, (mask % 4) * TILE, Math.floor(mask / 4) * TILE, TILE, TILE,
+        c * TILE - TILE / 2, r * TILE - TILE / 2);
+    }
+  }
+}
+
 function drawScenery(busy) {
+  if (plan.rug) drawRug(plan.rug[0], plan.rug[1], plan.rug[2], plan.rug[3]);
   plan.items.forEach((item) => {
     const size = FURNITURE[item.name];
     if (!size) return;
@@ -707,6 +739,106 @@ function drawBubble(worker, cx, cy) {
   }
 }
 
+
+/* ------------------------------------------------------------------ pets */
+
+/* The office dog and cat. They belong to nobody, carry no state from the
+   agent, and exist because an office with only workers in it reads as a
+   diagram. They wander the same walkable grid the characters use. */
+
+const PET_WANDER = [3, 14];
+const PET_SPEED = 30;
+const PET_FRAME_SEC = 0.18;
+const petActors = [];
+
+function newPet(index) {
+  const spots = plan.walkable;
+  const spot = spots.length ? spots[(index * 37) % spots.length] : { col: 1, row: 2 };
+  const at = tileCenter(spot.col, spot.row);
+  return {
+    sheet: index,
+    col: spot.col, row: spot.row, x: at.x, y: at.y,
+    dir: 'down', state: 'idle', frame: 0, frameTimer: 0,
+    path: [], progress: 0,
+    wanderTimer: randRange(PET_WANDER[0], PET_WANDER[1]) + index * 2,
+  };
+}
+
+function updatePet(pet, dt) {
+  pet.frameTimer += dt;
+  if (pet.frameTimer >= PET_FRAME_SEC) {
+    pet.frameTimer -= PET_FRAME_SEC;
+    pet.frame = (pet.frame + 1) % 3;
+  }
+
+  if (pet.state === 'idle') {
+    pet.wanderTimer -= dt;
+    if (pet.wanderTimer > 0) return;
+    pet.wanderTimer = randRange(PET_WANDER[0], PET_WANDER[1]);
+    const spots = plan.walkable;
+    if (!spots.length) return;
+    const target = spots[Math.floor(Math.random() * spots.length)];
+    const path = findPath(pet.col, pet.row, target.col, target.row);
+    if (path.length) {
+      pet.path = path;
+      pet.progress = 0;
+      pet.state = 'walk';
+    }
+    return;
+  }
+
+  if (!pet.path.length) {
+    const at = tileCenter(pet.col, pet.row);
+    pet.x = at.x;
+    pet.y = at.y;
+    pet.state = 'idle';
+    return;
+  }
+
+  const next = pet.path[0];
+  pet.dir = next.col > pet.col ? 'right'
+    : next.col < pet.col ? 'left'
+    : next.row > pet.row ? 'down' : 'up';
+  pet.progress += (PET_SPEED / TILE) * dt;
+
+  const from = tileCenter(pet.col, pet.row);
+  const to = tileCenter(next.col, next.row);
+  const t = Math.min(pet.progress, 1);
+  pet.x = from.x + (to.x - from.x) * t;
+  pet.y = from.y + (to.y - from.y) * t;
+
+  if (pet.progress >= 1) {
+    pet.col = next.col;
+    pet.row = next.row;
+    pet.x = to.x;
+    pet.y = to.y;
+    pet.path.shift();
+    pet.progress = 0;
+  }
+}
+
+function drawPet(pet) {
+  const sheet = art.pets[pet.sheet % art.pets.length];
+  if (!sheet) return;
+  const walking = pet.state === 'walk';
+
+  if (pet.dir === 'right' || pet.dir === 'left') {
+    // The side row is three 32-wide frames; standing still shows the first.
+    const f = walking ? pet.frame : 0;
+    blitFrame(sheet, f * 32, 64, 32, 32, pet.x - 16, pet.y - 26, pet.dir === 'left');
+    return;
+  }
+  const row = pet.dir === 'up' ? 32 : 0;
+  const f = (walking ? 0 : 3) + pet.frame;
+  blitFrame(sheet, f * 16, row, 16, 32, pet.x - 8, pet.y - 26);
+}
+
+function syncPets() {
+  const want = showPets ? Math.min(PETS.length, art.pets.length) : 0;
+  while (petActors.length > want) petActors.pop();
+  while (petActors.length < want) petActors.push(newPet(petActors.length));
+}
+
 /* ------------------------------------------------------------------ labels */
 
 function drawLabels(workers) {
@@ -825,6 +957,12 @@ function stepWorld(seconds) {
     }
   });
   actors.forEach((_, id) => { if (!alive.has(id)) actors.delete(id); });
+
+  syncPets();
+  petActors.forEach((pet) => {
+    for (let debt = simDebt; debt >= SIM_STEP; debt -= SIM_STEP) updatePet(pet, SIM_STEP);
+  });
+
   simDebt %= SIM_STEP;
   lastSim = performance.now();
 }
@@ -869,6 +1007,7 @@ function tick(stamp) {
     plan = planOffice(desks);
     plan.shape = shape;
     actors.clear();
+    petActors.length = 0;
   }
 
   const pad = 16;
@@ -903,9 +1042,14 @@ function tick(stamp) {
     if (actor && actor.fade > 0.02) drawn.push({ actor, worker });
   });
 
-  // Painter's order: whoever is further down the room is drawn last.
+  // Painter's order: whoever is further down the room is drawn last. Pets join
+  // the same sort so a dog in front of a desk is drawn in front of it.
+  petActors.forEach((pet) => drawn.push({ actor: pet, pet: true }));
   drawn.sort((a, b) => a.actor.y - b.actor.y);
-  drawn.forEach(({ actor, worker }) => drawCharacter(actor, worker));
+  drawn.forEach((entry) => {
+    if (entry.pet) drawPet(entry.actor);
+    else drawCharacter(entry.actor, entry.worker);
+  });
 
   drawLabels(workers);
   requestAnimationFrame(tick);
@@ -915,7 +1059,9 @@ function tick(stamp) {
 
 const ZOOM_KEY = 'visual-office.zoom';
 const PLATES_KEY = 'visual-office.plates';
+const PETS_KEY = 'visual-office.pets';
 let showPlates = false;
+let showPets = true;
 
 function loadZoom() {
   try {
@@ -964,6 +1110,25 @@ function wirePlates() {
   button.addEventListener('click', () => {
     showPlates = !showPlates;
     try { localStorage.setItem(PLATES_KEY, showPlates ? '1' : '0'); } catch (err) { /* fine */ }
+    paint();
+  });
+  paint();
+}
+
+function wirePets() {
+  const button = document.getElementById('toggle-pets');
+  if (!button) return;
+  try {
+    const saved = localStorage.getItem(PETS_KEY);
+    if (saved !== null) showPets = saved === '1';
+  } catch (err) { /* blocked storage — the default stands */ }
+  const paint = () => {
+    button.setAttribute('aria-pressed', showPets ? 'true' : 'false');
+    button.title = showPets ? 'ซ่อนสัตว์เลี้ยง' : 'แสดงสัตว์เลี้ยง';
+  };
+  button.addEventListener('click', () => {
+    showPets = !showPets;
+    try { localStorage.setItem(PETS_KEY, showPets ? '1' : '0'); } catch (err) { /* fine */ }
     paint();
   });
   paint();
@@ -1347,6 +1512,7 @@ function connect() {
 
 wireZoom();
 wirePlates();
+wirePets();
 wireEditor();
 loadArt().then(() => {
   fetch('/api/state').then((r) => r.json()).then(apply).catch(() => {});
