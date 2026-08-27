@@ -175,42 +175,6 @@ def catalog(force: bool = False) -> list[dict[str, Any]]:
     return models
 
 
-def set_agent_model(model: str) -> tuple[bool, str]:
-    """Point the top-level agent at *model*. Returns ``(changed, message)``.
-
-    Refuses a model the gateway will not serve this key, because the failure
-    would otherwise land on the next message with nothing to explain it.
-    """
-    wanted = (model or "").strip()
-    if not wanted:
-        return False, "ไม่ได้ระบุโมเดล"
-
-    current, _, _ = agent_model()
-    if wanted == current:
-        return False, ""
-
-    known = {m["id"] for m in catalog(force=True)}
-    if known and wanted not in known:
-        return False, (
-            f"gateway ไม่มีโมเดลชื่อ {wanted!r} ให้คีย์นี้เรียก — "
-            f"มีให้เลือก: {', '.join(sorted(known))}"
-        )
-
-    try:
-        import yaml
-
-        path = config_path()
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        shutil.copy2(path, path.with_name(f"{path.name}.vo-bak.{stamp}"))
-
-        config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        config.setdefault("model", {})["default"] = wanted
-        path.write_text(
-            yaml.safe_dump(config, allow_unicode=True, sort_keys=False, default_flow_style=False),
-            encoding="utf-8",
-        )
-    except Exception as exc:
-        return False, f"เขียน config.yaml ไม่ได้: {exc}"
-
-    logger.info("visual_office: main model %s -> %s", current or "(ไม่ได้ตั้ง)", wanted)
-    return True, f"เปลี่ยนโมเดลหลักเป็น {wanted} แล้ว — มีผลกับ session ถัดไป"
+# There is deliberately no setter here. Changing which model the top-level agent
+# runs on is done by its owner — `hermes model`, or editing ~/.hermes/config.yaml
+# — not by this plugin as a side effect of something else.

@@ -30,7 +30,7 @@ body {
   color: var(--ink-2);
   font-family: var(--font);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) var(--panel-w, 320px);
   grid-template-rows: auto minmax(0, 1fr) auto;
   grid-template-areas:
     "bar   bar"
@@ -574,3 +574,72 @@ body {
 .ed-caps.bad { color: var(--alert); }
 .ed-caps b { color: var(--local); font-weight: 400; }
 .ed-desk .ed-caps { grid-column: 1 / -1; margin-top: -4px; }
+
+#editor output#ed-main-model {
+  display: block;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--ground);
+  border: 1px solid var(--line);
+  padding: 6px 8px;
+}
+.ed-note { margin: 6px 0 0; font-size: 11.5px; color: var(--muted); line-height: 1.6; }
+.ed-note code { font-family: var(--mono); font-size: 11px; color: var(--ink-2); }
+
+/* ---------- panel grip ---------- */
+
+/* แถบข้างกว้างตายตัวใช้ไม่ได้กับทุกจอ: ชื่อโมเดลกับข้อความตอบกลับยาวไม่เท่ากัน
+   และหน้าจอ 13 นิ้วกับจอต่อนอกก็คนละเรื่อง · ลากเอาเองจบกว่าเดาแทนผู้ใช้ */
+.panel { position: relative; }
+
+.panel-grip {
+  position: absolute;
+  left: -4px;
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  cursor: col-resize;
+  z-index: 5;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  touch-action: none;
+}
+
+/* เส้นบาง ๆ ที่โผล่มาเมื่อเอาเมาส์ไปใกล้ — ไม่ต้องมีอะไรให้มองตลอดเวลา */
+.panel-grip::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--accent, #4b9fea);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.panel-grip:hover::after,
+.panel-grip:focus-visible::after,
+body.resizing-panel .panel-grip::after { opacity: 0.85; }
+
+.panel-grip:focus-visible { outline: none; }
+
+/* ระหว่างลาก อย่าให้เมาส์ไปเลือกข้อความหรือให้ iframe แย่ง pointer ไป */
+body.resizing-panel { user-select: none; cursor: col-resize; }
+
+/* ---------- desk editor: endpoint ของตัวเอง ---------- */
+
+/* โต๊ะที่ไม่ผ่าน gateway ต้องดูออกตั้งแต่ยังไม่ได้อ่าน — มันคือโต๊ะที่ยังทำงาน
+   ตอน gateway ล่ม และเป็นโต๊ะที่ไม่มี tools ทั้งสองอย่างสำคัญพอจะมีสีของตัวเอง */
+.ed-desk.direct { border-left-color: #c78b3c; }
+
+.ed-endpoint {
+  display: contents;
+}
+
+.ed-endpoint[hidden] { display: none; }
+
+.ed-desk label.dim { opacity: 0.45; }
+.ed-desk label.dim input { cursor: not-allowed; }

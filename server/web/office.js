@@ -902,8 +902,14 @@ let simDebt = 0;
 const SIM_STEP = 1 / 60;
 const SIM_CATCHUP_MAX = 1.5;   // seconds of world advanced per frame, at most
 
-/** Give every worker a seat: its own desk first, then a desk running the same
- *  model (a top-level session IS the work happening at that desk), then a sofa. */
+/** Give every worker a seat that matches what it is doing.
+ *
+ *  Its own desk first, then a desk running the same model — a top-level session
+ *  IS the work happening at that desk. Anyone still working after that takes a
+ *  place at the meeting table, which has the monitors on it; the sofa is for
+ *  the idle. Sitting a busy model on the sofa reads as "nothing is happening"
+ *  at a glance, which is the one thing this room exists to answer.
+ */
 function assignSeats(workers) {
   const taken = new Set();
   workers.filter((w) => !w.gone && w.desk).forEach((w) => {
@@ -924,12 +930,25 @@ function assignSeats(workers) {
     }
   });
 
+  // The meeting table was drawn with four workstations and then never handed to
+  // anybody — busy sessions with no desk of their own went to the lounge, so the
+  // one part of the room that looks most like work sat empty all day.
+  const meeting = plan.seats.filter((s) => s.kind === 'meeting');
   const lounge = plan.seats.filter((s) => s.kind === 'lounge');
-  let free = 0;
+  let atTable = 0;
+  let resting = 0;
+
   workers.forEach((w) => {
     if (w.gone) { w.seatId = null; return; }
     if (w.deskSeat) { w.seatId = w.deskSeat; return; }
-    const spot = lounge[free++ % Math.max(1, lounge.length)];
+
+    if (w.activity && w.activity !== 'idle' && atTable < meeting.length) {
+      w.seatId = meeting[atTable++].id;
+      return;
+    }
+    // Everyone left is idle, or the table is full. Wrapping is deliberate:
+    // sharing a sofa looks fine, and a null seat leaves somebody stranded.
+    const spot = lounge[resting++ % Math.max(1, lounge.length)];
     w.seatId = spot ? spot.id : null;
   });
 }
@@ -1388,9 +1407,69 @@ function deskRow(desk) {
   paintCaps(caps, desk.model);
   modelInput.addEventListener('input', () => paintCaps(caps, modelInput.value.trim()));
   row.append(caps);
-  field('toolsets (คั่นด้วย , )', 'toolsets', {
+  const toolsetsInput = field('toolsets (คั่นด้วย , )', 'toolsets', {
     wide: true, placeholder: 'file, terminal, web',
   });
+
+  /* วิธีต่อ — โต๊ะที่ผ่าน gateway เป็น subagent เต็มรูป (มี tools มี session) แต่ตายพร้อม
+     gateway · โต๊ะที่ชี้ endpoint เองยิงตรงแบบถาม-ตอบ ไม่มี tools แต่ยังทำงานต่อได้
+     ตอน gateway ล่ม · เลือกได้ต่อโต๊ะ ไม่ใช่ทั้งห้องเหมือนกันหมด */
+  const viaWrap = document.createElement('label');
+  viaWrap.className = 'wide';
+  viaWrap.append('ต่อผ่าน');
+  const via = document.createElement('select');
+  [['gateway', 'gateway (เป็น subagent เต็มรูป · มี tools)'],
+   ['direct', 'endpoint ของตัวเอง (ถาม-ตอบ · ไม่ตายตาม gateway)']].forEach(([value, text]) => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = text;
+    if ((desk.base_url ? 'direct' : 'gateway') === value) option.selected = true;
+    via.append(option);
+  });
+  viaWrap.append(via);
+  row.append(viaWrap);
+
+  const endpoint = document.createElement('div');
+  endpoint.className = 'ed-endpoint';
+  row.append(endpoint);
+
+  const baseInput = field('base url ของ endpoint นี้', 'base_url', {
+    wide: true, placeholder: 'http://100.115.254.108:8002/v1',
+  });
+  const keyInput = field('ชื่อ env ที่เก็บคีย์ (เว้นว่างได้ถ้า endpoint ไม่ต้องใช้คีย์)', 'api_key_env', {
+    wide: true, max: 64, placeholder: 'SPARK_WORKER_API_KEY',
+  });
+  // ย้ายสองช่องนี้เข้ากล่องที่ซ่อน/แสดงได้ · field() ต่อท้าย row ให้เสมอ
+  endpoint.append(baseInput.parentElement, keyInput.parentElement);
+
+  const hint = document.createElement('p');
+  hint.className = 'ed-caps';
+  endpoint.append(hint);
+
+  const paintVia = () => {
+    const direct = via.value === 'direct';
+    endpoint.hidden = !direct;
+    row.classList.toggle('direct', direct);
+    // toolsets ไม่มีผลกับโต๊ะที่ยิงตรง — บอกไว้ดีกว่าปล่อยให้กรอกแล้วงงว่าทำไมไม่ทำงาน
+    toolsetsInput.disabled = direct;
+    toolsetsInput.parentElement.classList.toggle('dim', direct);
+    hint.textContent = direct
+      ? 'โต๊ะนี้ไม่ผ่าน gateway — ถาม-ตอบอย่างเดียว ไม่มี tools ไม่มี session · คีย์เก็บใน env ไม่ลงไฟล์'
+      : '';
+  };
+
+  via.addEventListener('change', () => {
+    if (via.value === 'gateway') {
+      // เปลี่ยนกลับมาใช้ gateway แล้วปล่อย base_url ค้างไว้ = โต๊ะยังยิงตรงอยู่เงียบ ๆ
+      desk.base_url = '';
+      desk.api_key_env = '';
+      baseInput.value = '';
+      keyInput.value = '';
+    }
+    paintVia();
+  });
+  paintVia();
+
   field('หมายเหตุ', 'note', { wide: true, max: 200, placeholder: 'โมเดลโค้ด 80B' });
 
   return row;
@@ -1444,6 +1523,7 @@ async function openEditor() {
       origin: d.origin || 'unknown', provider: d.provider || '',
       note: d.note || '', role: d.role || 'leaf',
       toolsets: (d.toolsets || []).join(', '),
+      base_url: d.base_url || '', api_key_env: d.api_key_env || '',
     })),
   };
 
@@ -1452,15 +1532,13 @@ async function openEditor() {
 
   modelInfo = new Map((data.available_models || []).map((m) => [m.id, m]));
 
-  const mainInput = document.getElementById('ed-main-model');
-  const mainCaps = document.getElementById('ed-main-caps');
-  editorState.mainModel = data.main_model || data.agent_model || '';
-  mainInput.value = editorState.mainModel;
-  paintCaps(mainCaps, mainInput.value.trim());
-  mainInput.oninput = () => {
-    editorState.mainModel = mainInput.value;
-    paintCaps(mainCaps, mainInput.value.trim());
-  };
+  // Shown, never edited here: which model the top-level agent runs on is the
+  // owner's call, and a field that writes it would change the agent's brain as
+  // a side effect of saving a desk.
+  const mainOut = document.getElementById('ed-main-model');
+  const current = data.agent_model || '(ยังไม่ได้ตั้ง)';
+  mainOut.textContent = current;
+  paintCaps(document.getElementById('ed-main-caps'), data.agent_model || '');
 
   const options = document.getElementById('model-options');
   options.innerHTML = '';
@@ -1496,15 +1574,13 @@ async function saveEditor() {
   setEditorMessage('กำลังบันทึก…');
 
   const payload = {
-    office: {
-      name: document.getElementById('ed-office-name').value,
-      main_model: document.getElementById('ed-main-model').value,
-    },
+    office: { name: document.getElementById('ed-office-name').value },
     gateway: { base_url: document.getElementById('ed-gateway').value },
     desks: editorState.desks.map((d) => ({
       id: d.id, label: d.label, model: d.model, origin: d.origin,
       provider: d.provider, note: d.note, role: d.role,
       toolsets: d.toolsets,
+      base_url: d.base_url || '', api_key_env: d.api_key_env || '',
     })),
   };
 
@@ -1546,6 +1622,7 @@ function wireEditor() {
     editorState.desks.push({
       id: '', label: '', model: '', origin: 'local',
       provider: '', note: '', role: 'leaf', toolsets: '',
+      base_url: '', api_key_env: '',
     });
     renderEditorDesks();
   });
@@ -1735,7 +1812,90 @@ function connect() {
   };
 }
 
+/* ------------------------------------------------------- panel resizing */
+
+/* 320px คงที่พอดีกับจอเดียว · ชื่อโมเดลยาว ๆ กับข้อความตอบกลับล้นตลอด และคนที่ต่อ
+   จอนอกก็อยากได้กว้างกว่านั้น · เก็บค่าที่ลากไว้ใน localStorage เพราะเป็นความชอบ
+   ของคนที่นั่งอยู่หน้าจอนี้ ไม่ใช่ค่าที่ทุกคนควรได้เหมือนกัน */
+const PANEL_MIN = 260;
+const PANEL_MAX = 900;
+const PANEL_DEFAULT = 320;
+const PANEL_KEY = 'visual-office.panel-width';
+
+function clampPanel(px) {
+  // เหลือที่ให้ห้องอย่างน้อยครึ่งจอเสมอ — ลากจนห้องหายไปคือลากพลาด ไม่ใช่ความตั้งใจ
+  const roof = Math.min(PANEL_MAX, Math.round(window.innerWidth * 0.6));
+  return Math.max(PANEL_MIN, Math.min(roof, Math.round(px)));
+}
+
+function setPanelWidth(px, remember) {
+  const width = clampPanel(px);
+  document.body.style.setProperty('--panel-w', width + 'px');
+  if (remember) {
+    try { localStorage.setItem(PANEL_KEY, String(width)); } catch (err) { /* โหมดส่วนตัว */ }
+  }
+  // ไม่ต้องบอกห้องให้วาดใหม่: ลูปวาดวัด canvas.clientWidth ทุกเฟรมอยู่แล้ว
+  return width;
+}
+
+function wirePanelGrip() {
+  const grip = document.getElementById('panel-grip');
+  if (!grip) return;
+
+  let saved = null;
+  try { saved = localStorage.getItem(PANEL_KEY); } catch (err) { /* โหมดส่วนตัว */ }
+  if (saved) setPanelWidth(parseInt(saved, 10) || PANEL_DEFAULT, false);
+
+  let dragging = false;
+
+  grip.addEventListener('pointerdown', (event) => {
+    dragging = true;
+    grip.setPointerCapture(event.pointerId);
+    document.body.classList.add('resizing-panel');
+    event.preventDefault();
+  });
+
+  grip.addEventListener('pointermove', (event) => {
+    if (!dragging) return;
+    // ความกว้าง = ระยะจากขอบขวาของหน้าต่างถึงตำแหน่งเมาส์
+    setPanelWidth(window.innerWidth - event.clientX, false);
+  });
+
+  const stop = (event) => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove('resizing-panel');
+    try { grip.releasePointerCapture(event.pointerId); } catch (err) { /* ปล่อยไปแล้ว */ }
+    const current = parseInt(getComputedStyle(document.body).getPropertyValue('--panel-w'), 10);
+    setPanelWidth(current || PANEL_DEFAULT, true);
+  };
+  grip.addEventListener('pointerup', stop);
+  grip.addEventListener('pointercancel', stop);
+
+  // ดับเบิลคลิกคืนค่าเดิม — ลากเพลินจนหาทางกลับไม่เจอเป็นเรื่องปกติ
+  grip.addEventListener('dblclick', () => setPanelWidth(PANEL_DEFAULT, true));
+
+  // คนที่ใช้คีย์บอร์ดอย่างเดียวก็ต้องปรับได้ ไม่ใช่ปุ่มที่กดแล้วไม่เกิดอะไรขึ้น
+  grip.addEventListener('keydown', (event) => {
+    const step = event.shiftKey ? 48 : 12;
+    const now = parseInt(getComputedStyle(document.body).getPropertyValue('--panel-w'), 10)
+      || PANEL_DEFAULT;
+    if (event.key === 'ArrowLeft') setPanelWidth(now + step, true);
+    else if (event.key === 'ArrowRight') setPanelWidth(now - step, true);
+    else if (event.key === 'Home') setPanelWidth(PANEL_DEFAULT, true);
+    else return;
+    event.preventDefault();
+  });
+
+  // จอเล็กลงแล้วแถบข้างที่เคยลากไว้กว้างอาจกินห้องจนหมด — บีบกลับให้เอง
+  window.addEventListener('resize', () => {
+    const now = parseInt(getComputedStyle(document.body).getPropertyValue('--panel-w'), 10);
+    if (now) setPanelWidth(now, false);
+  });
+}
+
 wireZoom();
+wirePanelGrip();
 wirePlates();
 wirePets();
 wireEditor();

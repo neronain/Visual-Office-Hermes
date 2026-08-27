@@ -38,6 +38,8 @@
 </main>
 
 <aside class="panel">
+  <button type="button" class="panel-grip" id="panel-grip"
+          aria-label="ลากเพื่อปรับความกว้างแถบข้าง (ลูกศรซ้าย-ขวาก็ได้ · ดับเบิลคลิกเพื่อคืนค่าเดิม)"></button>
   <section>
     <h2>โต๊ะและโมเดล <button type="button" id="open-editor" class="h2-action">จัดการ</button></h2>
     <ul class="desks" id="desks"><li class="muted">ยังไม่ได้รับรายชื่อโต๊ะจากปลั๊กอิน</li></ul>
@@ -101,9 +103,10 @@
 
       <div class="ed-main">
         <label>โมเดลหลัก — ตัวที่เอเจนต์ตัวแม่ใช้เอง
-          <input type="text" id="ed-main-model" list="model-options" maxlength="200" autocomplete="off"
-                 placeholder="claude-sonnet-4.8"></label>
+          <output id="ed-main-model"></output></label>
         <p class="ed-caps" id="ed-main-caps"></p>
+        <p class="ed-note">หน้านี้ไม่เปลี่ยนโมเดลหลักให้ · เปลี่ยนด้วย <code>hermes model</code>
+          หรือแก้ <code>~/.hermes/config.yaml</code> เอง</p>
       </div>
 
       <div id="ed-desks"></div>

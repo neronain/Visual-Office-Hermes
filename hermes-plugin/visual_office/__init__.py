@@ -13,6 +13,11 @@ bound to a model in the roster, and the child agent is launched pinned to that
 model through Hermes' public subagent lifecycle API — not the global
 ``delegation.model`` that would give every child the same brain.
 
+A desk that carries its own ``base_url`` is handled by :mod:`.direct` instead:
+it talks to that endpoint over plain OpenAI-compatible HTTP, so it answers even
+when the gateway is down. It gives up tools and the agent loop to do that. Both
+kinds share one id space, so nothing outside has to know which is which.
+
 Nothing here can change what Hermes does. Every hook returns ``None``, every
 network call is fire-and-forget, and a stopped office server is invisible to the
 agent.
@@ -26,6 +31,7 @@ import threading
 import time
 from typing import Any, Optional
 
+from . import direct
 from . import gateway as gw
 from .desks import Roster, desks_path, load_roster
 from .sink import Sink
@@ -42,6 +48,7 @@ _ROSTER_STAMP: Optional[tuple] = None
 _TOOL_SIGNATURE: Optional[tuple] = None
 _HANDLES: dict[str, Any] = {}
 _HANDLES_LOCK = threading.Lock()
+_REPORT_LOCK = threading.Lock()
 _CTX: Any = None
 
 # Live gateway sessions we could inject a message into, newest first. Captured
@@ -124,24 +131,15 @@ def _refresh() -> Roster:
     return roster
 
 
-def _apply_main_model(roster: Roster) -> None:
-    """Follow the roster's choice of main model into Hermes' own config.
-
-    The desk file is where a person decides which model does what; the main
-    agent's model is the same kind of decision, so it belongs beside the desks
-    rather than in a second file they have to remember.
-    """
-    if not roster.main_model:
-        return
-    changed, message = gw.set_agent_model(roster.main_model)
-    if message and not changed:
-        logger.warning("visual_office main model: %s", message)
-
-
 def _announce_roster() -> None:
-    """Tell the office which desks exist, and what the gateway says they can do."""
+    """Tell the office which desks exist, and what the gateway says they can do.
+
+    The main model is reported, never written. Which model the top-level agent
+    runs on is the owner's decision and theirs alone — a plugin that quietly
+    re-asserted it from a second file would change the agent's brain as a side
+    effect of saving a desk.
+    """
     roster = _refresh()
-    _apply_main_model(roster)
     payload = roster.to_dict()
     payload["available_models"] = gw.catalog()
     payload["agent_model"] = gw.agent_model()[0]
@@ -532,6 +530,13 @@ def _handle_spawn(params: dict) -> str:
             available=[{"id": d.id, "label": d.label, "model": d.model} for d in roster.desks],
         )
 
+    wait_for_it = params.get("wait")
+    wait_for_it = True if wait_for_it is None else bool(wait_for_it)
+    timeout = float(params.get("timeout_seconds") or _wait_seconds())
+
+    if desk.direct:
+        return _spawn_direct(desk, goal, params, wait_for_it, timeout)
+
     if _CTX is None:
         return _fail("visual_office was not registered with a plugin context.")
 
@@ -575,9 +580,7 @@ def _handle_spawn(params: dict) -> str:
         goal=goal,
     )
 
-    wait = params.get("wait")
-    wait = True if wait is None else bool(wait)
-    if not wait:
+    if not wait_for_it:
         return json.dumps(
             {
                 "success": True,
@@ -590,7 +593,6 @@ def _handle_spawn(params: dict) -> str:
             ensure_ascii=False,
         )
 
-    timeout = float(params.get("timeout_seconds") or _wait_seconds())
     terminal = _CTX.subagent_lifecycle.wait(handle, timeout_seconds=timeout)
     if not terminal.completed:
         return json.dumps(
@@ -628,10 +630,130 @@ def _handle_spawn(params: dict) -> str:
     )
 
 
+def _direct_payload(run: direct.DirectRun, **extra: Any) -> str:
+    return json.dumps(
+        {
+            "success": run.state == direct.SUCCEEDED,
+            "subagent_id": run.run_id,
+            "desk": run.desk_id,
+            "desk_label": run.desk_label,
+            "model": run.model,
+            "state": run.state,
+            "summary": run.summary or None,
+            "error": run.error or None,
+            "usage": dict(run.usage),
+            "duration_seconds": run.duration_seconds,
+            "via": run.base_url,
+            **extra,
+        },
+        ensure_ascii=False,
+    )
+
+
+def _spawn_direct(desk, goal: str, params: dict, wait_for_it: bool, timeout: float) -> str:
+    """โต๊ะที่ชี้ endpoint ของตัวเอง — ไม่ผ่าน Hermes จึงต้องส่งเหตุการณ์เข้าห้องเอง
+
+    subagent จริงมี hook ของ Hermes คอยส่ง subagent_start/stop และคำตอบให้อยู่แล้ว
+    ทางนี้ไม่มีใครส่งให้ ถ้าไม่ทำเองตัวละครจะไม่ขยับและคำตอบจะไม่ขึ้นบนหน้าจอเลย
+    """
+    context = str(params.get("context") or "") or None
+    run = direct.launch(desk, goal, context, timeout)
+
+    _emit(
+        "desk_assign",
+        subagent_id=run.run_id,
+        desk=desk.id,
+        desk_label=desk.label,
+        origin=desk.origin,
+        model=desk.model,
+        provider=desk.provider,
+        goal=goal,
+        via=desk.base_url,
+    )
+    _emit(
+        "subagent_start",
+        session_id=run.run_id,
+        subagent_id=run.run_id,
+        role=desk.role,
+        goal=goal,
+    )
+
+    if not wait_for_it:
+        _watch_direct(run.run_id, timeout)
+        return json.dumps(
+            {
+                "success": True,
+                "subagent_id": run.run_id,
+                "desk": desk.id,
+                "model": desk.model,
+                "state": direct.RUNNING,
+                "via": desk.base_url,
+                "note": "Running in the background. Poll with action='status'.",
+            },
+            ensure_ascii=False,
+        )
+
+    direct.wait(run.run_id, timeout)
+    _report_direct(run)
+    if not run.terminal:
+        return _direct_payload(
+            run,
+            note=f"Still working after {timeout:.0f}s. Poll with action='status'.",
+            success=True,
+        )
+    return _direct_payload(run)
+
+
+def _report_direct(run: direct.DirectRun) -> None:
+    """ส่งคำตอบและการจบงานเข้าห้อง — ครั้งเดียวต่อหนึ่งงาน
+
+    งานหนึ่งชิ้นมีได้สามคนที่เจอว่ามันจบ: ตัวที่รออยู่, การ poll status, และเธรดที่
+    เฝ้าอยู่เบื้องหลัง · ถ้าไม่กันไว้ ห้องจะได้คำตอบเดียวกันซ้ำสองสามรอบ
+    """
+    with _REPORT_LOCK:
+        if not run.terminal or run._reported:
+            return
+        run._reported = True
+    if run.summary:
+        _emit(
+            "reply",
+            session_id=run.run_id,
+            subagent_id=run.run_id,
+            model=run.model,
+            text=run.summary[:REPLY_MAX_CHARS],
+        )
+    _emit(
+        "subagent_stop",
+        session_id=run.run_id,
+        subagent_id=run.run_id,
+        status=run.state,
+        summary=run.summary or run.error,
+        duration_ms=int((run.duration_seconds or 0) * 1000),
+    )
+
+
+def _watch_direct(run_id: str, timeout: float) -> None:
+    """รอผลของงานเบื้องหลังในเธรดแยก เพื่อให้ห้องได้เห็นคำตอบแม้ไม่มีใครมา poll"""
+    def _wait_then_report() -> None:
+        run = direct.wait(run_id, timeout)
+        if run is not None:
+            _report_direct(run)
+
+    threading.Thread(
+        target=_wait_then_report, name=f"visual-office-watch-{run_id}", daemon=True
+    ).start()
+
+
 def _handle_status(params: dict) -> str:
     subagent_id = str(params.get("subagent_id") or "").strip()
     if not subagent_id:
         return _fail("action='status' needs a subagent_id.")
+
+    run = direct.get(subagent_id)
+    if run is not None:
+        _report_direct(run)
+        return _direct_payload(run, success=True)
+
     with _HANDLES_LOCK:
         handle = _HANDLES.get(subagent_id)
     if handle is None:
@@ -664,6 +786,16 @@ def _handle_list(_params: dict) -> str:
         running.append(
             {"subagent_id": handle.subagent_id, "model": handle.model, "state": state}
         )
+    for run in direct.running():
+        running.append(
+            {
+                "subagent_id": run.run_id,
+                "model": run.model,
+                "state": run.state,
+                "desk": run.desk_id,
+                "via": run.base_url,
+            }
+        )
     return json.dumps(
         {
             "success": True,
@@ -680,11 +812,29 @@ def _handle_cancel(params: dict) -> str:
     subagent_id = str(params.get("subagent_id") or "").strip()
     if not subagent_id:
         return _fail("action='cancel' needs a subagent_id.")
+    reason = str(params.get("message") or "Cancelled from office_delegate.")
+
+    run = direct.get(subagent_id)
+    if run is not None:
+        # คำขอ HTTP ที่ยิงออกไปแล้วเรียกกลับไม่ได้ — ที่ทำได้คือเลิกรับผลของมัน
+        already = run.terminal
+        direct.cancel(subagent_id, reason)
+        _report_direct(run)
+        return json.dumps(
+            {
+                "success": True,
+                "subagent_id": subagent_id,
+                "state": run.state,
+                "already_terminal": already,
+                "note": "The request already in flight is ignored, not stopped.",
+            },
+            ensure_ascii=False,
+        )
+
     with _HANDLES_LOCK:
         handle = _HANDLES.get(subagent_id)
     if handle is None:
         return _fail(f"Unknown subagent_id {subagent_id!r}.")
-    reason = str(params.get("message") or "Cancelled from office_delegate.")
     outcome = _CTX.subagent_lifecycle.cancel(handle, reason=reason)
     return json.dumps(
         {

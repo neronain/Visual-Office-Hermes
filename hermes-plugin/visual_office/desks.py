@@ -4,12 +4,18 @@ A desk is the unit the whole project is built around: a name a human uses
 ("ช่างโค้ด"), bound to one model string. When a task is handed to a desk, the
 child agent is pinned to that desk's model.
 
-Why only a model string and not a full endpoint: Hermes' public subagent
-lifecycle API accepts a model, and the child inherits the parent's provider and
-base URL. So the parent must point at something that can reach every model you
-want on a desk — which is exactly what a gateway alias is for. Point Hermes at
-LiteGate, give each desk an alias, and a desk can sit on a cloud model or on
-your own GPU without Hermes knowing the difference.
+A desk reaches its model one of two ways.
+
+Through the gateway (``base_url`` empty) it becomes a real Hermes subagent:
+tools, its own session, the whole agent loop. Hermes' public subagent API takes
+a model and nothing else — the child inherits the parent's provider and base
+URL — so every gateway desk necessarily shares one endpoint, and a gateway
+alias is what makes them land on different machines anyway.
+
+With its own ``base_url`` it skips Hermes entirely and speaks OpenAI-compatible
+HTTP straight to that endpoint. It answers questions and nothing more: no
+tools, no session, no agent loop. What it buys is independence — that desk
+keeps working when the gateway is down, which a gateway desk cannot do.
 """
 
 from __future__ import annotations
@@ -35,10 +41,20 @@ class Desk:
     note: str = ""
     toolsets: tuple[str, ...] = ()
     role: str = "leaf"
+    # ว่าง = ผ่าน gateway (เป็น subagent เต็มรูป) · มีค่า = ยิงตรงไปที่ endpoint นี้เอง
+    base_url: str = ""
+    # ชื่อ env ที่เก็บคีย์ของ endpoint นั้น — ไม่เก็บตัวคีย์ลงไฟล์ roster
+    api_key_env: str = ""
+
+    @property
+    def direct(self) -> bool:
+        """โต๊ะนี้คุยกับ endpoint ของตัวเองโดยไม่ผ่าน gateway หรือไม่"""
+        return bool(self.base_url)
 
     def to_dict(self) -> dict[str, Any]:
         data = dataclasses.asdict(self)
         data["toolsets"] = list(self.toolsets)
+        data["direct"] = self.direct
         return data
 
 
@@ -112,6 +128,21 @@ def _coerce_desk(raw: Any, index: int, problems: list[str]) -> Optional[Desk]:
         raw_toolsets = [raw_toolsets]
     toolsets = tuple(str(t).strip() for t in raw_toolsets if str(t).strip())
 
+    base_url = str(raw.get("base_url") or "").strip().rstrip("/")
+    if base_url and not base_url.startswith(("http://", "https://")):
+        problems.append(
+            f"desk {desk_id!r} has base_url {base_url!r} without http:// or https:// — "
+            "ignored, so this desk keeps going through the gateway"
+        )
+        base_url = ""
+
+    # toolsets ไม่มีผลกับโต๊ะที่ยิงตรง — พูดออกมาดีกว่าปล่อยให้คิดว่าตั้งแล้วได้ผล
+    if base_url and toolsets:
+        problems.append(
+            f"desk {desk_id!r} is a direct-endpoint desk; its toolsets are ignored "
+            "(only gateway desks run as Hermes subagents)"
+        )
+
     return Desk(
         id=desk_id,
         label=str(raw.get("label") or desk_id).strip(),
@@ -121,6 +152,8 @@ def _coerce_desk(raw: Any, index: int, problems: list[str]) -> Optional[Desk]:
         note=str(raw.get("note") or "").strip(),
         toolsets=toolsets,
         role=role,
+        base_url=base_url,
+        api_key_env=str(raw.get("api_key_env") or "").strip(),
     )
 
 

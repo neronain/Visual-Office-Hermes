@@ -169,3 +169,58 @@ restart และไม่มีช่วงบริการขาด
 ⚠️ **อย่าลืมให้สิทธิ์คีย์ด้วย** — alias ใหม่ที่ไม่ได้อยู่ในรายการโมเดลของ API key
 จะไม่โผล่ใน `/v1/models` และลูกที่นั่งโต๊ะนั้นจะได้ 401 เพิ่มสิทธิ์ในคอนโซล LiteGate
 ที่หน้า API keys
+
+---
+
+## โต๊ะมีสองแบบ: ผ่าน gateway กับยิงตรง
+
+ช่อง **ต่อผ่าน** ในหน้าจัดการโต๊ะเลือกได้ทีละโต๊ะ ไม่ใช่ทั้งห้องเหมือนกันหมด
+
+| | ผ่าน gateway | ยิงตรงไปที่ endpoint เอง |
+|---|---|---|
+| เป็นอะไร | subagent เต็มรูปของ Hermes | ถาม-ตอบล้วน ๆ ผ่าน HTTP |
+| tools | ใช้ได้ | **ไม่มี** |
+| session / agent loop | มี | ไม่มี |
+| gateway ล่มแล้ว | ตายตาม | **ยังทำงานต่อได้** |
+| ตั้งค่า | เว้น `base_url` ว่างไว้ | ใส่ `base_url` (กับ `api_key_env` ถ้า endpoint ต้องใช้คีย์) |
+
+### ทำไมต้องมีสองแบบ
+
+`SubagentLaunchRequest` ของ Hermes รับแค่ชื่อโมเดล ไม่มีช่องให้ใส่ base_url — ลูกจึง
+สืบ endpoint จากพ่อเสมอ นั่นแปลว่า **โต๊ะที่เป็น subagent จริงทุกตัวใช้ประตูเดียวกัน**
+และ alias ของ gateway คือสิ่งเดียวที่พาโต๊ะแต่ละตัวไปลงคนละเครื่องได้
+
+ข้อดีคือได้ tools กับ session ครบ ข้อเสียคือ gateway กลายเป็นจุดตายจุดเดียว
+
+โต๊ะที่ใส่ `base_url` เองจะข้าม Hermes ไปเลย คุยกับ endpoint นั้นตรง ๆ แบบ
+OpenAI-compatible แลก tools ทิ้งไปเพื่อให้ยังตอบได้ตอน gateway ล่ม
+
+### ตัวอย่าง
+
+```yaml
+desks:
+  # ผ่าน gateway — ได้ tools ครบ
+  - id: "coder"
+    label: "ช่างโค้ด"
+    model: "claude-opus-4.8"
+    toolsets: ["file", "terminal", "web"]
+
+  # ยิงตรง — ไม่ตายตาม gateway
+  - id: "thinker"
+    label: "หัวคิด"
+    model: "huihui-gpt-oss-120b-abliterated-mxfp4-moe-gguf"
+    base_url: "http://100.78.221.35:8011/v1"
+
+  # ยิงตรง + ต้องใช้คีย์
+  - id: "cloud"
+    label: "ตัวนอก"
+    model: "gpt-4o-mini"
+    base_url: "https://api.example.com/v1"
+    api_key_env: "EXAMPLE_API_KEY"
+```
+
+`api_key_env` เก็บ **ชื่อตัวแปรสภาพแวดล้อม** ไม่ใช่ตัวคีย์ — ไฟล์ roster ถูกอ่านผ่าน API
+ได้ทั้งไฟล์ คีย์จึงไม่ควรอยู่ในนั้น · ปลั๊กอินหาค่าจาก environment ก่อน แล้วค่อยจาก
+`~/.hermes/.env`
+
+`toolsets` ของโต๊ะที่ยิงตรงถูกเมิน และตัวอ่าน roster จะเตือนไว้ให้ ไม่ปล่อยให้เข้าใจผิดว่าตั้งแล้วได้ผล

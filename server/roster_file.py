@@ -23,7 +23,9 @@ TOOLSET = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
 MAX_DESKS = 12
 LIMITS = {"label": 64, "model": 200, "note": 200, "provider": 64,
-          "office_name": 64, "gateway": 200}
+          "office_name": 64, "gateway": 200, "base_url": 200, "api_key_env": 64}
+
+API_KEY_ENV = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 
 
 class RosterError(ValueError):
@@ -98,6 +100,30 @@ def normalize(payload: Any) -> dict[str, Any]:
         if len(toolsets) > 12:
             raise RosterError(f"โต๊ะ {desk_id}: toolsets มากเกินไป")
 
+        base_url = _text(raw.get("base_url"), f"โต๊ะ {desk_id}: base_url", LIMITS["base_url"])
+        if base_url:
+            base_url = base_url.rstrip("/")
+            if not base_url.startswith(("http://", "https://")):
+                raise RosterError(
+                    f"โต๊ะ {desk_id}: base_url ต้องขึ้นต้นด้วย http:// หรือ https:// "
+                    f"(ว่างไว้ = ใช้ gateway)"
+                )
+
+        api_key_env = _text(
+            raw.get("api_key_env"), f"โต๊ะ {desk_id}: api_key_env", LIMITS["api_key_env"]
+        ).upper()
+        if api_key_env and not API_KEY_ENV.match(api_key_env):
+            raise RosterError(
+                f"โต๊ะ {desk_id}: api_key_env ต้องเป็นชื่อตัวแปรสภาพแวดล้อม "
+                f"(A-Z 0-9 _ ขึ้นต้นด้วยตัวอักษร) ไม่ใช่ตัวคีย์"
+            )
+        # กันคนวางคีย์จริงลงช่องนี้ — roster ถูกอ่านได้ทั้งไฟล์และส่งออกทาง API
+        if api_key_env and not base_url:
+            raise RosterError(
+                f"โต๊ะ {desk_id}: ตั้ง api_key_env ไว้แต่ไม่มี base_url — "
+                f"โต๊ะที่ผ่าน gateway ใช้คีย์ของ Hermes อยู่แล้ว"
+            )
+
         desks.append({
             "id": desk_id,
             "label": _text(raw.get("label"), f"โต๊ะ {desk_id}: label", LIMITS["label"]) or desk_id,
@@ -107,11 +133,12 @@ def normalize(payload: Any) -> dict[str, Any]:
             "note": _text(raw.get("note"), f"โต๊ะ {desk_id}: note", LIMITS["note"]),
             "toolsets": toolsets,
             "role": role,
+            "base_url": base_url,
+            "api_key_env": api_key_env,
         })
 
     return {
         "office_name": _text(office.get("name"), "ชื่อห้อง", LIMITS["office_name"]) or "Visual Office",
-        "main_model": _text(office.get("main_model"), "โมเดลหลัก", LIMITS["model"]),
         "gateway_base_url": _text(gateway.get("base_url"), "gateway base_url", LIMITS["gateway"]),
         "desks": desks,
     }
@@ -136,9 +163,6 @@ def dump(roster: dict[str, Any], stamp: str) -> str:
         "",
         "office:",
         f"  name: {_scalar(roster['office_name'])}",
-        # Which model the top-level agent runs on. The plugin follows this into
-        # ~/.hermes/config.yaml, so both decisions live in one file.
-        f"  main_model: {_scalar(roster['main_model'])}",
         "",
         "gateway:",
         f"  base_url: {_scalar(roster['gateway_base_url'])}",
@@ -159,5 +183,10 @@ def dump(roster: dict[str, Any], stamp: str) -> str:
             lines.append(f"    toolsets: [{joined}]")
         if desk["role"] != "leaf":
             lines.append(f"    role: {_scalar(desk['role'])}")
+        # ว่าง = ผ่าน gateway · เขียนเฉพาะเมื่อมีค่า ไฟล์จะได้ไม่รกด้วยบรรทัดว่าง
+        if desk.get("base_url"):
+            lines.append(f"    base_url: {_scalar(desk['base_url'])}")
+        if desk.get("api_key_env"):
+            lines.append(f"    api_key_env: {_scalar(desk['api_key_env'])}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
