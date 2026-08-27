@@ -49,7 +49,7 @@ _ACTIVITY_BY_FRAGMENT: tuple[tuple[str, str], ...] = (
 )
 
 IDLE_AFTER_SECONDS = 90.0
-GONE_AFTER_SECONDS = 120.0   # a character who has left is off the floor in two minutes
+GONE_AFTER_SECONDS = 40.0    # long enough to watch someone walk out, short enough to empty the room
 
 
 def activity_for_tool(tool_name: Optional[str]) -> str:
@@ -106,6 +106,11 @@ class Office:
         # before or after the subagent_start hook. Both orders happen.
         self.subagent_sessions: dict[str, str] = {}
         self.pending_desks: dict[str, dict[str, Any]] = {}
+        # Running totals, kept apart from the worker list. A character leaves the
+        # floor after a minute; what it spent should not leave with it.
+        self.totals = {"calls": 0, "tokens_in": 0, "tokens_out": 0}
+        self.by_origin: dict[str, dict[str, int]] = {}
+        self.by_model: dict[str, dict[str, int]] = {}
 
     # -- helpers ------------------------------------------------------------
 
@@ -290,6 +295,18 @@ class Office:
                     worker[field] = event[field]
             self._desk_totals(worker.get("desk"), tokens_in, tokens_out)
 
+            self.totals["calls"] += 1
+            self.totals["tokens_in"] += tokens_in
+            self.totals["tokens_out"] += tokens_out
+            for bucket, key in (
+                (self.by_origin, worker.get("origin") or "unknown"),
+                (self.by_model, worker.get("model") or "unknown"),
+            ):
+                row = bucket.setdefault(key, {"calls": 0, "tokens_in": 0, "tokens_out": 0})
+                row["calls"] += 1
+                row["tokens_in"] += tokens_in
+                row["tokens_out"] += tokens_out
+
     def _apply_roster(self, roster: dict[str, Any]) -> None:
         self.office_name = str(roster.get("office_name") or self.office_name)
         self.gateway_base_url = str(roster.get("gateway_base_url") or self.gateway_base_url)
@@ -340,28 +357,6 @@ class Office:
 
             workers.sort(key=lambda w: (w["kind"] != "session", w["started_at"]))
 
-            totals = {"calls": 0, "tokens_in": 0, "tokens_out": 0}
-            by_origin: dict[str, dict[str, int]] = {}
-            by_model: dict[str, dict[str, int]] = {}
-            for worker in workers:
-                totals["calls"] += worker["calls"]
-                totals["tokens_in"] += worker["tokens_in"]
-                totals["tokens_out"] += worker["tokens_out"]
-                origin = worker.get("origin") or "unknown"
-                bucket = by_origin.setdefault(
-                    origin, {"calls": 0, "tokens_in": 0, "tokens_out": 0}
-                )
-                bucket["calls"] += worker["calls"]
-                bucket["tokens_in"] += worker["tokens_in"]
-                bucket["tokens_out"] += worker["tokens_out"]
-                model = worker.get("model") or "unknown"
-                mbucket = by_model.setdefault(
-                    model, {"calls": 0, "tokens_in": 0, "tokens_out": 0}
-                )
-                mbucket["calls"] += worker["calls"]
-                mbucket["tokens_in"] += worker["tokens_in"]
-                mbucket["tokens_out"] += worker["tokens_out"]
-
             desks = [
                 dict(self.desks[desk_id])
                 for desk_id in self.desk_order
@@ -384,8 +379,8 @@ class Office:
                 },
                 "desks": desks,
                 "workers": workers,
-                "totals": totals,
-                "by_origin": by_origin,
-                "by_model": by_model,
+                "totals": dict(self.totals),
+                "by_origin": {k: dict(v) for k, v in self.by_origin.items()},
+                "by_model": {k: dict(v) for k, v in self.by_model.items()},
                 "waiting": sum(1 for w in workers if w.get("needs_input")),
             }

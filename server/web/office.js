@@ -216,8 +216,21 @@ function clip(text, maxPx) {
 
 /* ------------------------------------------------------------------ the plan */
 
-const WORK_PAD = 1;      // interior columns of padding either side of the desks
-const DESK_PITCH = 4;    // 3-tile desk + 1 tile of elbow room
+/* The office is a tile grid. Everything downstream — what gets drawn, what
+ * blocks a walk, where somebody can sit — is derived from the one furniture
+ * list built here, so the picture and the collision map can never disagree.
+ *
+ * Chairs, benches and sofas are deliberately NOT blocking: a seat you cannot
+ * walk onto is a seat nobody ever reaches.
+ */
+
+const BLOCKING = new Set([
+  'DESK_FRONT', 'TABLE_FRONT', 'COFFEE_TABLE', 'LARGE_PLANT',
+  'PLANT', 'PLANT_2', 'BIN', 'SMALL_TABLE_FRONT',
+]);
+
+const WORK_PAD = 1;
+const DESK_PITCH = 4;
 const LOUNGE_INTERIOR = 8;
 const DECOR_ROW = 0;
 const WALL_ROW = 1;
@@ -231,34 +244,95 @@ function planOffice(desks) {
   const rows = Math.ceil(n / cols);
 
   const workInterior = Math.max(9, WORK_PAD * 2 + cols * DESK_PITCH - 1);
-  const workX0 = 1;                       // first interior column
-  const midWall = workX0 + workInterior;  // shared wall column
+  const workX0 = 1;
+  const midWall = workX0 + workInterior;
   const loungeX0 = midWall + 1;
   const totalCols = loungeX0 + LOUNGE_INTERIOR + 1;
 
   const meetRow = FIRST_DESK_ROW + rows * DESK_ROW_PITCH + 1;
   const lastRow = meetRow + MEET_ROWS + 1;
   const totalRows = lastRow + 1;
-
-  const cells = desks.map((desk, i) => {
-    const c = workX0 + WORK_PAD + (i % cols) * DESK_PITCH;
-    const r = FIRST_DESK_ROW + Math.floor(i / cols) * DESK_ROW_PITCH;
-    return { desk, col: c, row: r, benchRow: r + 2, seats: 0 };
-  });
-
   const doorTop = WALL_ROW + Math.max(3, Math.floor((totalRows - WALL_ROW) / 2) - 1);
 
-  return {
+  const plan = {
     cols: totalCols, rows: totalRows,
     W: totalCols * TILE, H: totalRows * TILE,
     workX0, workInterior, midWall, loungeX0, loungeInterior: LOUNGE_INTERIOR,
-    firstFloorRow: WALL_ROW + 1, lastRow,
-    meetRow, doorTop, doorRows: 3,
-    cells, cellsById: new Map(cells.map((c) => [c.desk.id, c])),
+    firstFloorRow: WALL_ROW + 1, lastRow, meetRow, doorTop, doorRows: 3,
+    items: [], seats: [], cells: [], cellsById: new Map(),
+    door: { col: midWall, row: doorTop + 1 },
   };
+
+  const add = (name, col, row, mirror) => plan.items.push({ name, col, row, mirror: !!mirror });
+  const seat = (id, col, row, dir, kind, deskId) =>
+    plan.seats.push({ id, col, row, dir, kind, deskId: deskId || null });
+
+  // Desks, one per model in the roster.
+  desks.forEach((desk, i) => {
+    const col = workX0 + WORK_PAD + (i % cols) * DESK_PITCH;
+    const row = FIRST_DESK_ROW + Math.floor(i / cols) * DESK_ROW_PITCH;
+    const cell = { desk, col, row, benchRow: row + 2 };
+    plan.cells.push(cell);
+    plan.cellsById.set(desk.id, cell);
+    add('DESK_FRONT', col, row);
+    add('CUSHIONED_BENCH', col + 1, row + 2);
+    // Facing up: the monitor is what they are looking at.
+    seat(`desk:${desk.id}`, col + 1, row + 2, 'up', 'desk', desk.id);
+  });
+
+  // Wall decor sits on the void row above the wall, where the wall art shows.
+  add('HANGING_PLANT', workX0, DECOR_ROW);
+  add('DOUBLE_BOOKSHELF', workX0 + 1, DECOR_ROW);
+  add('CLOCK', workX0 + Math.floor(workInterior / 2), DECOR_ROW);
+  add('DOUBLE_BOOKSHELF', workX0 + workInterior - 3, DECOR_ROW);
+  add('HANGING_PLANT', workX0 + workInterior - 1, DECOR_ROW);
+  add('SMALL_PAINTING', loungeX0 + 1, DECOR_ROW);
+  add('LARGE_PAINTING', loungeX0 + 3, DECOR_ROW);
+  add('SMALL_PAINTING_2', loungeX0 + 6, DECOR_ROW);
+
+  // Meeting table.
+  const tableCol = workX0 + Math.max(0, Math.floor((workInterior - 3) / 2));
+  add('TABLE_FRONT', tableCol, meetRow);
+  add('PC_SIDE', tableCol, meetRow);
+  add('PC_SIDE', tableCol, meetRow + 2);
+  add('PC_SIDE', tableCol + 2, meetRow, true);
+  add('PC_SIDE', tableCol + 2, meetRow + 2, true);
+  [0, 2].forEach((d, i) => {
+    add('WOODEN_CHAIR_SIDE', tableCol - 1, meetRow + d);
+    add('WOODEN_CHAIR_SIDE', tableCol + 3, meetRow + d, true);
+    seat(`meet:l${i}`, tableCol - 1, meetRow + d + 1, 'right', 'meeting');
+    seat(`meet:r${i}`, tableCol + 3, meetRow + d + 1, 'left', 'meeting');
+  });
+
+  add('PLANT_2', workX0, lastRow - 3);
+  add('BIN', workX0, lastRow);
+  add('LARGE_PLANT', workX0 + workInterior - 2, lastRow - 3);
+
+  // Lounge.
+  const cx = loungeX0 + Math.floor(LOUNGE_INTERIOR / 2) - 1;
+  const cy = plan.firstFloorRow + 3;
+  add('SOFA_FRONT', cx, cy);
+  add('SOFA_SIDE', cx - 1, cy + 1);
+  add('COFFEE_TABLE', cx, cy + 1);
+  add('COFFEE', cx, cy + 2);
+  add('SOFA_SIDE', cx + 2, cy + 1, true);
+  add('SOFA_BACK', cx, cy + 3);
+  add('PLANT', loungeX0, plan.firstFloorRow);
+  add('PLANT_2', loungeX0 + LOUNGE_INTERIOR - 1, plan.firstFloorRow);
+  add('SMALL_TABLE_FRONT', loungeX0 + LOUNGE_INTERIOR - 2, lastRow - 3);
+
+  seat('sofa:top-l', cx, cy, 'down', 'lounge');
+  seat('sofa:top-r', cx + 1, cy, 'down', 'lounge');
+  seat('sofa:bottom-l', cx, cy + 3, 'up', 'lounge');
+  seat('sofa:bottom-r', cx + 1, cy + 3, 'up', 'lounge');
+  seat('sofa:left', cx - 1, cy + 1, 'right', 'lounge');
+  seat('sofa:right', cx + 2, cy + 1, 'left', 'lounge');
+
+  buildGrid(plan);
+  return plan;
 }
 
-function isWall(col, row) {
+function isWallTile(plan, col, row) {
   if (row === WALL_ROW) return true;
   if (row < WALL_ROW || row > plan.lastRow) return false;
   if (col === 0 || col === plan.cols - 1) return true;
@@ -266,18 +340,96 @@ function isWall(col, row) {
   return false;
 }
 
+function buildGrid(plan) {
+  const grid = new Uint8Array(plan.cols * plan.rows);
+  for (let row = plan.firstFloorRow; row <= plan.lastRow; row++) {
+    for (let col = 1; col < plan.cols - 1; col++) {
+      if (!isWallTile(plan, col, row)) grid[row * plan.cols + col] = 1;
+    }
+  }
+  plan.items.forEach((item) => {
+    if (!BLOCKING.has(item.name)) return;
+    const size = FURNITURE[item.name];
+    if (!size) return;
+    for (let dr = 0; dr < size[1] / TILE; dr++) {
+      for (let dc = 0; dc < size[0] / TILE; dc++) {
+        const col = item.col + dc, row = item.row + dr;
+        if (col >= 0 && col < plan.cols && row >= 0 && row < plan.rows) {
+          grid[row * plan.cols + col] = 0;
+        }
+      }
+    }
+  });
+  // A seat must be reachable, whatever is drawn on it.
+  plan.seats.forEach((s) => {
+    if (s.col >= 0 && s.col < plan.cols && s.row >= 0 && s.row < plan.rows) {
+      grid[s.row * plan.cols + s.col] = 1;
+    }
+  });
+  grid[plan.door.row * plan.cols + plan.door.col] = 1;
+  plan.grid = grid;
+  plan.walkable = [];
+  for (let row = 0; row < plan.rows; row++) {
+    for (let col = 0; col < plan.cols; col++) {
+      if (grid[row * plan.cols + col]) plan.walkable.push({ col, row });
+    }
+  }
+}
+
+function walkableAt(col, row) {
+  if (col < 0 || row < 0 || col >= plan.cols || row >= plan.rows) return false;
+  return plan.grid[row * plan.cols + col] === 1;
+}
+
+/** Breadth-first path over 4-neighbour tiles. Returns the steps after the start. */
+function findPath(fromCol, fromRow, toCol, toRow) {
+  if (fromCol === toCol && fromRow === toRow) return [];
+  if (!walkableAt(toCol, toRow)) return [];
+
+  const start = fromRow * plan.cols + fromCol;
+  const goal = toRow * plan.cols + toCol;
+  const parent = new Int32Array(plan.cols * plan.rows).fill(-1);
+  const seen = new Uint8Array(plan.cols * plan.rows);
+  seen[start] = 1;
+
+  const queue = [start];
+  let head = 0;
+  const steps = [-plan.cols, plan.cols, -1, 1];
+
+  while (head < queue.length) {
+    const at = queue[head++];
+    if (at === goal) {
+      const path = [];
+      let k = goal;
+      while (k !== start) {
+        path.unshift({ col: k % plan.cols, row: Math.floor(k / plan.cols) });
+        k = parent[k];
+      }
+      return path;
+    }
+    const col = at % plan.cols;
+    for (let i = 0; i < 4; i++) {
+      const next = at + steps[i];
+      if (next < 0 || next >= seen.length || seen[next]) continue;
+      const nextCol = next % plan.cols;
+      if (i >= 2 && Math.abs(nextCol - col) !== 1) continue;  // no wrapping across rows
+      if (!plan.grid[next]) continue;
+      seen[next] = 1;
+      parent[next] = at;
+      queue.push(next);
+    }
+  }
+  return [];
+}
+
 /* ------------------------------------------------------------------ scenery */
 
 function drawFloor() {
   for (let row = plan.firstFloorRow; row <= plan.lastRow; row++) {
     for (let col = 1; col < plan.cols - 1; col++) {
-      if (isWall(col, row)) continue;
+      if (isWallTile(plan, col, row)) continue;
       let img = art.floors.wood;
-      if (col > plan.midWall) {
-        img = row >= plan.lastRow - 1 ? art.floors.tile : art.floors.carpet;
-      } else if (col === plan.midWall) {
-        img = art.floors.wood;
-      }
+      if (col > plan.midWall) img = row >= plan.lastRow - 1 ? art.floors.tile : art.floors.carpet;
       blit(img, col * TILE, row * TILE, TILE, TILE);
     }
   }
@@ -287,161 +439,249 @@ function drawWalls() {
   if (!art.walls) return;
   for (let row = WALL_ROW; row <= plan.lastRow; row++) {
     for (let col = 0; col < plan.cols; col++) {
-      if (!isWall(col, row)) continue;
+      if (!isWallTile(plan, col, row)) continue;
       let mask = 0;
-      if (isWall(col, row - 1)) mask |= 1;
-      if (isWall(col + 1, row)) mask |= 2;
-      if (isWall(col, row + 1)) mask |= 4;
-      if (isWall(col - 1, row)) mask |= 8;
-      const sxp = (mask % 4) * 16;
-      const syp = Math.floor(mask / 4) * 32;
-      // Wall pieces are two tiles tall and hang above their own tile.
-      blitFrame(art.walls, sxp, syp, 16, 32, col * TILE, (row - 1) * TILE);
+      if (isWallTile(plan, col, row - 1)) mask |= 1;
+      if (isWallTile(plan, col + 1, row)) mask |= 2;
+      if (isWallTile(plan, col, row + 1)) mask |= 4;
+      if (isWallTile(plan, col - 1, row)) mask |= 8;
+      blitFrame(art.walls, (mask % 4) * 16, Math.floor(mask / 4) * 32, 16, 32,
+        col * TILE, (row - 1) * TILE);
     }
   }
-
-  // The wall above a doorway hangs down into it. Lay the floor back over the
-  // opening so the door reads as a way through and not a black slot.
+  // The wall above a doorway hangs into it; lay the floor back over the opening
+  // so the door reads as a way through and not a black slot.
   for (let row = plan.doorTop; row < plan.doorTop + plan.doorRows; row++) {
     blit(art.floors.wood, plan.midWall * TILE, row * TILE, TILE, TILE);
   }
 }
 
-function drawWallDecor() {
-  const w0 = plan.workX0, wi = plan.workInterior;
-  const r = DECOR_ROW;
-  place('HANGING_PLANT', w0, r);
-  place('DOUBLE_BOOKSHELF', w0 + 1, r);
-  place('CLOCK', w0 + Math.floor(wi / 2), r);
-  place('DOUBLE_BOOKSHELF', w0 + wi - 3, r);
-  place('HANGING_PLANT', w0 + wi - 1, r);
-
-  const l0 = plan.loungeX0;
-  place('SMALL_PAINTING', l0 + 1, r);
-  place('LARGE_PAINTING', l0 + 3, r);
-  place('SMALL_PAINTING_2', l0 + 6, r);
+/** Which PC sprite a desk shows: dark when the desk is idle, cycling when busy. */
+function pcSprite(busy) {
+  return busy ? `PC_FRONT_ON_${1 + (Math.floor(frame / 12) % 3)}` : 'PC_FRONT_OFF';
 }
 
-function drawStaticFurniture() {
-  const w0 = plan.workX0, wi = plan.workInterior;
-
-  // Meeting table with laptops and chairs down both sides.
-  const tableCol = w0 + Math.max(0, Math.floor((wi - 3) / 2));
-  const tableRow = plan.meetRow;
-  place('WOODEN_CHAIR_SIDE', tableCol - 1, tableRow);
-  place('WOODEN_CHAIR_SIDE', tableCol - 1, tableRow + 2);
-  place('TABLE_FRONT', tableCol, tableRow);
-  place('PC_SIDE', tableCol, tableRow);
-  place('PC_SIDE', tableCol, tableRow + 2);
-  place('PC_SIDE', tableCol + 2, tableRow, true);
-  place('PC_SIDE', tableCol + 2, tableRow + 2, true);
-  place('WOODEN_CHAIR_SIDE', tableCol + 3, tableRow, true);
-  place('WOODEN_CHAIR_SIDE', tableCol + 3, tableRow + 2, true);
-
-  place('PLANT_2', w0, plan.lastRow - 3);
-  place('BIN', w0, plan.lastRow);
-  place('LARGE_PLANT', w0 + wi - 2, plan.lastRow - 3);
-
-  // Lounge.
-  const l0 = plan.loungeX0;
-  const cx = l0 + Math.floor(plan.loungeInterior / 2) - 1;
-  const cy = plan.firstFloorRow + 3;
-  place('SOFA_FRONT', cx, cy);
-  place('SOFA_SIDE', cx - 1, cy + 1);
-  place('COFFEE_TABLE', cx, cy + 1);
-  place('COFFEE', cx, cy + 2);
-  place('SOFA_SIDE', cx + 2, cy + 1, true);
-  place('SOFA_BACK', cx, cy + 3);
-  place('PLANT', l0, plan.firstFloorRow);
-  place('PLANT_2', l0 + plan.loungeInterior - 1, plan.firstFloorRow);
-  place('SMALL_TABLE_FRONT', l0 + plan.loungeInterior - 2, plan.lastRow - 3);
-}
-
-function drawDesks(busy, waiting) {
+function drawScenery(busy) {
+  plan.items.forEach((item) => {
+    const size = FURNITURE[item.name];
+    if (!size) return;
+    blit(art.furniture[item.name], item.col * TILE, item.row * TILE, size[0], size[1], item.mirror);
+  });
   plan.cells.forEach((cell) => {
-    place('DESK_FRONT', cell.col, cell.row);
-    const on = busy.has(cell.desk.id);
-    const name = on
-      ? `PC_FRONT_ON_${1 + (Math.floor(frame / 12) % 3)}`
-      : 'PC_FRONT_OFF';
-    place(name, cell.col + 1, cell.row);
-    place('CUSHIONED_BENCH', cell.col + 1, cell.benchRow);
-    if (waiting.has(cell.desk.id)) {
-      const cx = (cell.col + 1) * TILE + TILE / 2;
-      const cy = cell.row * TILE - 6;
-      ctx.fillStyle = '#e4756a';
-      ctx.fillRect(px(cx - 6), py(cy - 14), px(cx + 6) - px(cx - 6), py(cy) - py(cy - 14));
-      ctx.fillStyle = '#3a1512';
-      ctx.fillRect(px(cx - 1.5), py(cy - 11), Math.max(1, px(cx + 1.5) - px(cx - 1.5)), py(cy - 5) - py(cy - 11));
-      ctx.fillRect(px(cx - 1.5), py(cy - 3.5), Math.max(1, px(cx + 1.5) - px(cx - 1.5)), py(cy - 1.5) - py(cy - 3.5));
-    }
+    const name = pcSprite(busy.has(cell.desk.id));
+    const size = FURNITURE[name];
+    blit(art.furniture[name], (cell.col + 1) * TILE, cell.row * TILE, size[0], size[1]);
   });
 }
 
 /* ------------------------------------------------------------------ people */
 
-/* Sheet layout: rows down/up/right, 7 frames of 16x32.
-   0-2 walk · 3-4 typing · 5-6 reading. Left is the mirrored right row. */
+/* The state machine follows the one Pixel Agents uses, because it is the part
+ * that makes a room feel inhabited rather than staged:
+ *
+ *   SIT   working — seated at a desk, typing or reading
+ *   WALK  moving along a tile path
+ *   IDLE  standing; after a pause, wander to a random tile, and after a few
+ *         wanders go back to a seat and rest
+ *
+ * Movement is tile-by-tile along a BFS path, so nobody walks through a desk.
+ */
+
 const DIR_ROW = { down: 0, up: 1, right: 2, left: 2 };
 const WALK_CYCLE = [0, 1, 2, 1];
+const WALK_SPEED = 44;           // px per second
+const WALK_FRAME_SEC = 0.15;
+const BUSY_FRAME_SEC = 0.3;
+const WANDER_PAUSE = [2.5, 11];
+const WANDER_MOVES = [2, 5];
+const SEAT_REST = [12, 30];
+const SIT_OFFSET = 6;
 
-function characterFrame(worker, moving) {
-  if (moving) return WALK_CYCLE[Math.floor(frame / 8) % 4];
-  switch (worker.activity) {
-    case 'typing':
-    case 'running':
-      return 3 + (Math.floor(frame / 10) % 2);
-    case 'reading':
-    case 'browsing':
-      return 5 + (Math.floor(frame / 16) % 2);
+function randRange(min, max) { return min + Math.random() * (max - min); }
+function randInt(min, max) { return min + Math.floor(Math.random() * (max - min + 1)); }
+
+function tileCenter(col, row) {
+  return { x: col * TILE + TILE / 2, y: row * TILE + TILE / 2 };
+}
+
+function seatById(id) {
+  return plan.seats.find((s) => s.id === id) || null;
+}
+
+function newActor(worker, seat) {
+  const start = seat || plan.seats[0] || { col: plan.door.col, row: plan.door.row, dir: 'down' };
+  const at = tileCenter(plan.door.col, plan.door.row);
+  return {
+    col: plan.door.col, row: plan.door.row,
+    x: at.x, y: at.y,
+    dir: 'down', state: 'idle',
+    frame: 0, frameTimer: 0,
+    path: [], progress: 0,
+    wanderTimer: randRange(WANDER_PAUSE[0], WANDER_PAUSE[1]),
+    wanderCount: 0, wanderLimit: randInt(WANDER_MOVES[0], WANDER_MOVES[1]),
+    seatTimer: 0, seatId: start.id || null,
+    fade: 1, leaving: false,
+  };
+}
+
+function repath(actor, col, row) {
+  const path = findPath(actor.col, actor.row, col, row);
+  if (!path.length) return false;
+  actor.path = path;
+  actor.progress = 0;
+  actor.state = 'walk';
+  actor.frame = 0;
+  actor.frameTimer = 0;
+  return true;
+}
+
+function updateActor(actor, worker, dt) {
+  actor.frameTimer += dt;
+  const seat = seatById(actor.seatId);
+  const active = !worker.gone && worker.activity !== 'idle';
+
+  if (worker.gone) {
+    if (actor.leaving) {
+      actor.y -= WALK_SPEED * 1.4 * dt;
+      actor.dir = 'up';
+      actor.state = 'walk';
+      if (actor.frameTimer >= WALK_FRAME_SEC) {
+        actor.frameTimer -= WALK_FRAME_SEC;
+        actor.frame = (actor.frame + 1) % 4;
+      }
+      actor.fade = Math.max(0, actor.fade - dt * 0.9);
+      return;
+    }
+    if (actor.col === plan.door.col && actor.row === plan.door.row && !actor.path.length) {
+      actor.leaving = true;
+      return;
+    }
+    if (actor.state !== 'walk' && !repath(actor, plan.door.col, plan.door.row)) {
+      actor.leaving = true;
+      return;
+    }
+  }
+
+  switch (actor.state) {
+    case 'sit': {
+      if (actor.frameTimer >= BUSY_FRAME_SEC) {
+        actor.frameTimer -= BUSY_FRAME_SEC;
+        actor.frame = (actor.frame + 1) % 2;
+      }
+      if (active) break;
+      if (actor.seatTimer > 0) { actor.seatTimer -= dt; break; }
+      actor.state = 'idle';
+      actor.frame = 0;
+      actor.wanderTimer = randRange(WANDER_PAUSE[0], WANDER_PAUSE[1]);
+      actor.wanderCount = 0;
+      actor.wanderLimit = randInt(WANDER_MOVES[0], WANDER_MOVES[1]);
+      break;
+    }
+
+    case 'idle': {
+      actor.frame = 0;
+      if (active && seat) {
+        if (actor.col === seat.col && actor.row === seat.row) {
+          actor.state = 'sit';
+          actor.dir = seat.dir;
+        } else {
+          repath(actor, seat.col, seat.row);
+        }
+        break;
+      }
+      actor.wanderTimer -= dt;
+      if (actor.wanderTimer > 0) break;
+      actor.wanderTimer = randRange(WANDER_PAUSE[0], WANDER_PAUSE[1]);
+
+      if (seat && actor.wanderCount >= actor.wanderLimit
+          && repath(actor, seat.col, seat.row)) break;
+
+      const spots = plan.walkable;
+      if (spots.length) {
+        const target = spots[Math.floor(Math.random() * spots.length)];
+        if (repath(actor, target.col, target.row)) actor.wanderCount++;
+      }
+      break;
+    }
+
+    case 'walk': {
+      if (actor.frameTimer >= WALK_FRAME_SEC) {
+        actor.frameTimer -= WALK_FRAME_SEC;
+        actor.frame = (actor.frame + 1) % 4;
+      }
+
+      if (!actor.path.length) {
+        const at = tileCenter(actor.col, actor.row);
+        actor.x = at.x;
+        actor.y = at.y;
+        if (seat && actor.col === seat.col && actor.row === seat.row) {
+          actor.state = 'sit';
+          actor.dir = seat.dir;
+          if (!active) {
+            actor.seatTimer = randRange(SEAT_REST[0], SEAT_REST[1]);
+            actor.wanderCount = 0;
+            actor.wanderLimit = randInt(WANDER_MOVES[0], WANDER_MOVES[1]);
+          }
+        } else {
+          actor.state = 'idle';
+          actor.wanderTimer = randRange(WANDER_PAUSE[0], WANDER_PAUSE[1]);
+        }
+        actor.frame = 0;
+        break;
+      }
+
+      const next = actor.path[0];
+      actor.dir = next.col > actor.col ? 'right'
+        : next.col < actor.col ? 'left'
+        : next.row > actor.row ? 'down' : 'up';
+      actor.progress += (WALK_SPEED / TILE) * dt;
+
+      const from = tileCenter(actor.col, actor.row);
+      const to = tileCenter(next.col, next.row);
+      const t = Math.min(actor.progress, 1);
+      actor.x = from.x + (to.x - from.x) * t;
+      actor.y = from.y + (to.y - from.y) * t;
+
+      if (actor.progress >= 1) {
+        actor.col = next.col;
+        actor.row = next.row;
+        actor.x = to.x;
+        actor.y = to.y;
+        actor.path.shift();
+        actor.progress = 0;
+      }
+
+      // Work arrived while wandering — turn around and head for the seat.
+      if (active && seat) {
+        const last = actor.path[actor.path.length - 1];
+        if (!last || last.col !== seat.col || last.row !== seat.row) {
+          repath(actor, seat.col, seat.row);
+        }
+      }
+      break;
+    }
     default:
-      return 0;
   }
 }
 
-function seatFor(worker, index) {
-  const cell = worker.desk ? plan.cellsById.get(worker.desk) : null;
-  if (cell) {
-    const n = cell.seats++;
-    return {
-      x: (cell.col + 1) * TILE + TILE / 2 + (n ? (n % 2 ? 18 : -18) : 0),
-      y: cell.benchRow * TILE + TILE + (n ? 14 : 0),
-      dir: 'down',
-      seated: true,
-    };
-  }
-  const l0 = plan.loungeX0;
-  const cx = l0 + Math.floor(plan.loungeInterior / 2) - 1;
-  const cy = plan.firstFloorRow + 3;
-  const spots = [
-    { x: (cx + 1) * TILE, y: (cy + 5) * TILE, dir: 'up' },
-    { x: (cx - 1) * TILE + 8, y: (cy + 2) * TILE + 8, dir: 'right' },
-    { x: (cx + 3) * TILE - 8, y: (cy + 2) * TILE + 8, dir: 'left' },
-    { x: (cx + 1) * TILE, y: (cy + 1) * TILE, dir: 'down' },
-    { x: (l0 + 1) * TILE, y: (plan.lastRow - 1) * TILE, dir: 'up' },
-    { x: (l0 + plan.loungeInterior - 2) * TILE, y: (plan.lastRow - 1) * TILE, dir: 'up' },
-  ];
-  return Object.assign({ seated: false }, spots[index % spots.length]);
+function characterFrame(actor, worker) {
+  if (actor.state === 'walk') return WALK_CYCLE[actor.frame % 4];
+  if (actor.state === 'idle') return WALK_CYCLE[1];
+  // Seated: reading tools get the book pose, everything else types.
+  const reading = worker.activity === 'reading' || worker.activity === 'browsing';
+  return (reading ? 5 : 3) + (actor.frame % 2);
 }
 
 function drawCharacter(actor, worker) {
   const sheet = art.chars[hash(worker.id) % art.chars.length];
   if (!sheet) return;
-  const dx = actor.tx - actor.x, dy = actor.ty - actor.y;
-  const moving = Math.abs(dx) + Math.abs(dy) > 1.5;
-
-  let dir = actor.dir || 'down';
-  if (moving) dir = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
-  else if (actor.rest) dir = actor.rest;
-  actor.dir = dir;
-
-  const f = characterFrame(worker, moving);
-  const sit = !moving && actor.seated ? 6 : 0;
+  const f = characterFrame(actor, worker);
+  const sit = actor.state === 'sit' ? SIT_OFFSET : 0;
   const x = actor.x - 8;
   const y = actor.y + sit - 32;
 
-  if (worker.gone) ctx.globalAlpha = 0.35;
-  blitFrame(sheet, f * 16, DIR_ROW[dir] * 32, 16, 32, x, y, dir === 'left');
+  if (actor.fade < 1) ctx.globalAlpha = Math.max(0, actor.fade);
+  blitFrame(sheet, f * 16, DIR_ROW[actor.dir] * 32, 16, 32, x, y, actor.dir === 'left');
   ctx.globalAlpha = 1;
 
   drawBubble(worker, actor.x, y - 2);
@@ -502,13 +742,13 @@ function drawLabels(workers) {
 
   workers.forEach((worker) => {
     const actor = actors.get(worker.id);
-    if (!actor || worker.desk) return;
+    if (!actor || worker.deskSeat || worker.gone) return;
     const cx = px(actor.x), top = py(actor.y + 5);
     ctx.font = '600 11px "IBM Plex Sans Thai", system-ui, sans-serif';
     const w = Math.min(Math.max(72, ctx.measureText(worker.model || '').width + 14), 180);
     ctx.fillStyle = 'rgba(14,11,18,.7)';
     ctx.fillRect(cx - w / 2, top, w, worker.model ? 28 : 15);
-    ctx.fillStyle = worker.gone ? '#8b98a6' : '#f2f6fa';
+    ctx.fillStyle = '#f2f6fa';
     ctx.fillText(clip(worker.platform || 'session', w - 8), cx, top + 1);
     if (worker.model) {
       ctx.font = '10px "IBM Plex Mono", ui-monospace, monospace';
@@ -522,8 +762,91 @@ function drawLabels(workers) {
 
 /* ------------------------------------------------------------------ loop */
 
-function tick() {
+let lastTick = 0;
+let lastSim = 0;
+let simDebt = 0;
+const SIM_STEP = 1 / 60;
+const SIM_CATCHUP_MAX = 1.5;   // seconds of world advanced per frame, at most
+
+/** Give every worker a seat: its own desk first, then a desk running the same
+ *  model (a top-level session IS the work happening at that desk), then a sofa. */
+function assignSeats(workers) {
+  const taken = new Set();
+  workers.filter((w) => !w.gone && w.desk).forEach((w) => {
+    w.deskSeat = `desk:${w.desk}`;
+    taken.add(w.deskSeat);
+  });
+
+  workers.forEach((w) => {
+    if (w.gone || w.desk) return;
+    w.deskSeat = null;
+    if (w.activity === 'idle' || !w.model) return;
+    const match = plan.cells.find(
+      (c) => c.desk.model === w.model && !taken.has(`desk:${c.desk.id}`)
+    );
+    if (match) {
+      w.deskSeat = `desk:${match.desk.id}`;
+      taken.add(w.deskSeat);
+    }
+  });
+
+  const lounge = plan.seats.filter((s) => s.kind === 'lounge');
+  let free = 0;
+  workers.forEach((w) => {
+    if (w.gone) { w.seatId = null; return; }
+    if (w.deskSeat) { w.seatId = w.deskSeat; return; }
+    const spot = lounge[free++ % Math.max(1, lounge.length)];
+    w.seatId = spot ? spot.id : null;
+  });
+}
+
+/** Advance every character by `seconds` of world time. Drawing is separate on
+ *  purpose: a hidden tab stops painting, but the office should still be running
+ *  when the viewer looks back. */
+function stepWorld(seconds) {
+  if (!plan || !snapshot) return;
+  const workers = snapshot.workers;
+  simDebt = Math.min(simDebt + Math.max(0, seconds), SIM_CATCHUP_MAX);
+
+  assignSeats(workers);
+  const alive = new Set();
+  workers.forEach((worker) => {
+    alive.add(worker.id);
+    let actor = actors.get(worker.id);
+    if (!actor) {
+      actor = newActor(worker, seatById(worker.seatId));
+      actors.set(worker.id, actor);
+    }
+    actor.seatId = worker.seatId || actor.seatId;
+    for (let debt = simDebt; debt >= SIM_STEP; debt -= SIM_STEP) {
+      updateActor(actor, worker, SIM_STEP);
+    }
+  });
+  actors.forEach((_, id) => { if (!alive.has(id)) actors.delete(id); });
+  simDebt %= SIM_STEP;
+  lastSim = performance.now();
+}
+
+// requestAnimationFrame stops outright while the page is hidden, so a timer
+// keeps the world moving. Hidden tabs throttle this to about once a second,
+// which is exactly the resolution the catch-up above is built for.
+setInterval(() => {
+  const now = performance.now();
+  if (now - lastTick < 400) return;   // frames are arriving; nothing to do
+  stepWorld((now - lastSim) / 1000);
+}, 1000);
+
+function tick(stamp) {
   frame++;
+  // A hidden tab gets one frame a second or none at all. Advancing by the raw
+  // frame delta would leave everyone frozen mid-stride until the viewer looks
+  // back; stepping a fixed simulation forward instead means the office keeps
+  // running and is simply drawn less often. The catch-up is capped so a tab
+  // left alone for an hour does not try to replay the hour on return.
+  const elapsed = lastTick ? (stamp - lastTick) / 1000 : SIM_STEP;
+  lastTick = stamp;
+  simDebt = Math.min(simDebt + Math.max(0, elapsed), SIM_CATCHUP_MAX);
+
   const cw = canvas.clientWidth, ch = canvas.clientHeight;
   const ratio = window.devicePixelRatio || 1;
   if (canvas.width !== Math.round(cw * ratio) || canvas.height !== Math.round(ch * ratio)) {
@@ -539,8 +862,12 @@ function tick() {
 
   const desks = snapshot ? snapshot.desks : [];
   const workers = snapshot ? snapshot.workers : [];
-  plan = planOffice(desks);
-  plan.cells.forEach((c) => { c.seats = 0; });
+  const shape = desks.map((d) => d.id).join('|');
+  if (!plan || plan.shape !== shape) {
+    plan = planOffice(desks);
+    plan.shape = shape;
+    actors.clear();
+  }
 
   const pad = 16;
   view.fit = Math.max(1, Math.floor(Math.min((cw - pad) / plan.W, (ch - pad) / plan.H)));
@@ -554,38 +881,29 @@ function tick() {
   view.oy = (ch - plan.H * view.s) / 2 + zoom.panY;
   syncZoomUi(overW > 0 || overH > 0);
 
-  drawFloor();
-  drawWalls();
-  drawWallDecor();
-  drawStaticFurniture();
+  // Advance the world first: what gets drawn below depends on the seat
+  // assignments this step produces.
+  stepWorld(elapsed);
 
   const busy = new Set(
-    workers.filter((w) => !w.gone && w.desk && w.activity !== 'idle').map((w) => w.desk)
+    workers
+      .filter((w) => !w.gone && w.deskSeat && w.activity !== 'idle')
+      .map((w) => w.deskSeat.slice(5))
   );
-  const waiting = new Set(workers.filter((w) => w.needs_input && w.desk).map((w) => w.desk));
-  drawDesks(busy, waiting);
 
-  const doorX = plan.midWall * TILE + TILE / 2;
-  const doorY = (plan.doorTop + 1) * TILE + TILE;
-  const alive = new Set();
-  let loose = 0;
+  drawFloor();
+  drawWalls();
+  drawScenery(busy);
+
+  const drawn = [];
   workers.forEach((worker) => {
-    alive.add(worker.id);
-    const seat = seatFor(worker, worker.desk || worker.gone ? 0 : loose++);
-    let actor = actors.get(worker.id);
-    if (!actor) {
-      actor = { x: doorX, y: doorY, tx: seat.x, ty: seat.y, dir: 'down' };
-      actors.set(worker.id, actor);
-    }
-    actor.tx = worker.gone ? doorX : seat.x;
-    actor.ty = worker.gone ? doorY : seat.y;
-    actor.rest = worker.gone ? 'down' : seat.dir;
-    actor.seated = !worker.gone && seat.seated;
-    actor.x += (actor.tx - actor.x) * 0.06;
-    actor.y += (actor.ty - actor.y) * 0.08;
-    drawCharacter(actor, worker);
+    const actor = actors.get(worker.id);
+    if (actor && actor.fade > 0.02) drawn.push({ actor, worker });
   });
-  actors.forEach((_, id) => { if (!alive.has(id)) actors.delete(id); });
+
+  // Painter's order: whoever is further down the room is drawn last.
+  drawn.sort((a, b) => a.actor.y - b.actor.y);
+  drawn.forEach(({ actor, worker }) => drawCharacter(actor, worker));
 
   drawLabels(workers);
   requestAnimationFrame(tick);
