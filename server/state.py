@@ -225,6 +225,8 @@ class Office:
                 "thinking_since": None,   # mid-thought until the turn or thinking_done
                 "tool": None,             # the tool currently open, by name
                 "awaiting_approval": False,
+                "awaiting_since": None,   # ตั้งแต่เมื่อไร — คนอ่านอยากรู้ว่ารอมานานแค่ไหน
+                "awaiting_text": "",      # รออนุมัติ *อะไร* · Hermes redact มาให้แล้ว
                 "finished_at": None,      # a real departure, not the end of a turn
                 "outcome": "",            # completed / failed / interrupted / closed
                 # counters
@@ -385,9 +387,16 @@ class Office:
 
         elif kind == "approval_wait":
             worker["awaiting_approval"] = True
+            worker["awaiting_since"] = now
+            worker["awaiting_text"] = (
+                str(event.get("description") or "").strip()
+                or str(event.get("command") or "").strip()
+            )
 
         elif kind == "approval_done":
             worker["awaiting_approval"] = False
+            worker["awaiting_since"] = None
+            worker["awaiting_text"] = ""
 
         elif kind == "api_request":
             tokens_in, tokens_out = _tokens(event.get("usage"))
@@ -567,4 +576,21 @@ class Office:
                 "by_origin": {k: dict(v) for k, v in self.by_origin.items()},
                 "by_model": {k: dict(v) for k, v in self.by_model.items()},
                 "waiting": sum(1 for w in workers if w.get("needs_input")),
+                # แยกออกมาให้เห็นชัด ไม่ใช่แค่ตัวเลข · นี่คือสถานะเดียวที่ไม่มีอะไร
+                # เดินต่อจนกว่าคนจะลงมือ คนเปิดหน้าจอมาควรเห็นก่อนอย่างอื่น
+                "needs_you": [
+                    {
+                        "id": w["id"],
+                        "desk": w.get("desk"),
+                        "desk_label": w.get("desk_label"),
+                        "platform": w.get("platform", ""),
+                        "model": w.get("model", ""),
+                        "text": w.get("awaiting_text", ""),
+                        "waiting_seconds": round(now - w["awaiting_since"], 1)
+                        if w.get("awaiting_since")
+                        else None,
+                    }
+                    for w in workers
+                    if w.get("needs_input")
+                ],
             }

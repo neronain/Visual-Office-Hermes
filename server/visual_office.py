@@ -10,9 +10,10 @@ Routes
   POST /api/command   queue a task typed into the office page (Bearer token)
   GET  /api/command/next    the plugin pulls one queued task (Bearer token)
   GET  /api/command/log     what was sent and how it went
-  GET  /api/said            recent replies and approval questions (memory only)
+  GET  /api/said            recent replies and approval questions (memory only, Bearer token)
 POST /api/said/clear      empty that list (Bearer token)
   GET  /api/desks     the desk roster; PUT to rewrite it (Bearer token)
+GET  /api/command/log     what has been sent from the room (Bearer token)
   GET  /api/state     the folded office snapshot
   GET  /api/stream    the same snapshot, pushed over SSE
   GET  /healthz       liveness
@@ -352,11 +353,21 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(401, {"error": "bad or missing bearer token"})
                 return
             self._handle_command_next()
-        elif path == "/api/said":
-            self._json(200, {"said": self.app.office.said()})
-        elif path == "/api/command/log":
-            with self.app.command_lock:
-                self._json(200, {"commands": list(reversed(self.app.command_log))})
+        elif path in ("/api/said", "/api/command/log"):
+            # เส้นแบ่งอยู่ตรงนี้: ห้องเป็นของสาธารณะ บทสนทนาไม่ใช่
+            #
+            # /api/state บอกว่าใครนั่งอยู่ตรงไหน ใช้โมเดลอะไร เผาโทเคนไปเท่าไร —
+            # เปิดให้ทุกคนที่เข้าถึงพอร์ตได้ตามที่ออกแบบไว้ตั้งแต่แรก · สองเส้นทาง
+            # นี้คนละเรื่อง: มันคืน *คำที่เอเจนต์พูด* กับ *คำสั่งที่คุณพิมพ์* ซึ่งเป็นคำ
+            # สัญญาคนละข้อ และถูกเพิ่มเข้ามาทีหลังโดยไม่มีใครกลับมาทบทวนเส้นแบ่ง
+            if not self._authorized():
+                self._json(401, {"error": "bad or missing bearer token"})
+                return
+            if path == "/api/said":
+                self._json(200, {"said": self.app.office.said()})
+            else:
+                with self.app.command_lock:
+                    self._json(200, {"commands": list(reversed(self.app.command_log))})
         elif path == "/api/token":
             # The desk editor needs the write token. Hand it over only to a
             # client on this machine — anyone else has to have been told it.

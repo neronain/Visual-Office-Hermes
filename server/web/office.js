@@ -1263,6 +1263,36 @@ function esc(value) {
     .replace(/"/g, '&quot;');
 }
 
+/* "รอคุณอยู่" อยู่บนสุดของแถบและซ่อนตัวเองเมื่อไม่มีอะไรรอ
+ *
+ * ทุกสถานะอื่นเดินต่อได้เองเมื่อเวลาผ่านไป — สถานะนี้สถานะเดียวที่หยุดนิ่งจนกว่าคนจะ
+ * ลงมือ · ตัวเลขบนหัวจอบอกว่ามีกี่ตัว แต่ไม่ได้บอกว่ารออะไรและรอมานานแค่ไหน
+ * ซึ่งเป็นสองอย่างที่ต้องรู้ก่อนจะตัดสินใจได้
+ */
+function renderNeedsYou(rows) {
+  const wrap = document.getElementById('needs-you-wrap');
+  if (!wrap) return;
+  wrap.hidden = rows.length === 0;
+  if (!rows.length) return;
+
+  document.getElementById('needs-you-count').textContent = rows.length;
+  document.getElementById('needs-you').innerHTML = rows.map((row) => {
+    const who = row.desk_label || row.desk || row.platform || 'ตัวหลัก';
+    const waited = row.waiting_seconds !== null && row.waiting_seconds !== undefined
+      ? `<span class="waited">${fmtWaited(row.waiting_seconds)}</span>` : '';
+    const what = row.text
+      ? `<div class="what">${esc(row.text.slice(0, 200))}</div>`
+      : '<div class="what muted">ไม่ได้บอกว่ารออะไร</div>';
+    return `<li><div class="who">${esc(who)}${waited}</div>${what}</li>`;
+  }).join('');
+}
+
+function fmtWaited(seconds) {
+  if (seconds < 60) return `${Math.round(seconds)} วิ`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)} นาที`;
+  return `${(seconds / 3600).toFixed(1)} ชม.`;
+}
+
 function renderPanel(snap) {
   document.getElementById('office-name').textContent = snap.office.name || 'Visual Office';
   document.getElementById('gateway').textContent = snap.office.gateway_base_url || '';
@@ -1275,6 +1305,7 @@ function renderPanel(snap) {
 
   document.getElementById('stat-waiting-wrap').hidden = !snap.waiting;
   document.getElementById('stat-waiting').textContent = snap.waiting;
+  renderNeedsYou(snap.needs_you || []);
   document.getElementById('empty').hidden = live.length > 0;
 
   document.getElementById('desks').innerHTML = snap.desks.length
@@ -1335,6 +1366,25 @@ function saveToken(value) {
 }
 
 let tokenWaiter = null;
+
+/** หา token ที่มีอยู่แล้วโดยไม่ถามใคร — เรียกตอนเปิดหน้า
+ *
+ *  คนที่เคยใส่ไว้ หรือคนที่นั่งอยู่บนเครื่องเดียวกับเซิร์ฟเวอร์ ควรเห็นแผงคำตอบทันที
+ *  ไม่ใช่เจอ "ต้องมี token" ทั้งที่ระบบหยิบให้เองได้ · ส่วนคนอื่นเงียบไว้ ไม่เด้งถาม
+ */
+async function adoptTokenQuietly() {
+  if (officeToken) return officeToken;
+  const stored = loadToken();
+  if (stored) { officeToken = stored; return officeToken; }
+  try {
+    const res = await fetch('/api/token');
+    if (res.ok) {
+      const body = await res.json();
+      if (body.token) { saveToken(body.token); return officeToken; }
+    }
+  } catch (err) { /* ไม่ได้อยู่เครื่องเดียวกัน — ปล่อยว่างไว้ */ }
+  return null;
+}
 
 /** Ask for the write token in the page, not in a modal browser prompt.
  *  A viewer on this machine never sees the field at all. */
@@ -1762,7 +1812,8 @@ function renderSayLog(rows) {
 
 async function refreshSayLog() {
   try {
-    const body = await (await fetch('/api/command/log')).json();
+    const body = await fetchPrivate('/api/command/log');
+    if (body === null) { document.getElementById('say-log').innerHTML = ''; return; }
     renderSayLog(body.commands || []);
   } catch (err) { /* the panel is a convenience, not a source of truth */ }
 }
@@ -1888,9 +1939,12 @@ function wireSay() {
       sendCommand();
     }
   });
-  refreshSayLog();
+  // หยิบ token ที่มีอยู่ก่อน แล้วค่อยดึงแผงที่ต้องใช้มัน
+  adoptTokenQuietly().finally(() => {
+    refreshSayLog();
+    refreshSaid();
+  });
   setInterval(refreshSayLog, 4000);
-  refreshSaid();
   setInterval(refreshSaid, 3000);
 }
 
@@ -1931,9 +1985,29 @@ function renderSaid(rows) {
   }).join('');
 }
 
+/* บทสนทนาต้องมี token ส่วนห้องไม่ต้อง · แต่ห้ามเด้งถามทันทีที่เปิดหน้า — คนที่แค่
+   อยากดูห้องบนจอทีวีไม่ควรถูกขวางด้วยกล่องกรอกรหัส · ถ้ายังไม่มี token ก็บอกไว้
+   เฉย ๆ แล้วให้กดเอาเองเมื่ออยากอ่าน */
+async function fetchPrivate(path) {
+  const headers = officeToken ? { Authorization: `Bearer ${officeToken}` } : {};
+  const res = await fetch(path, { headers });
+  if (res.status === 401) return null;
+  return res.json();
+}
+
+function lockedNotice(host, what) {
+  host.innerHTML = `<li class="muted">ต้องมี token ถึงจะดู${what}ได้ `
+    + `<button type="button" class="h2-action" data-unlock>ใส่ token</button></li>`;
+  const button = host.querySelector('[data-unlock]');
+  if (button) button.addEventListener('click', () => ensureToken().then(() => {
+    refreshSaid(); refreshSayLog();
+  }));
+}
+
 async function refreshSaid() {
   try {
-    const body = await (await fetch('/api/said')).json();
+    const body = await fetchPrivate('/api/said');
+    if (body === null) { lockedNotice(document.getElementById('said'), 'คำตอบ'); return; }
     renderSaid(body.said || []);
   } catch (err) { /* the panel is a convenience, not a source of truth */ }
 }

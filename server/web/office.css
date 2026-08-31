@@ -668,3 +668,57 @@ body.resizing-panel { user-select: none; cursor: col-resize; }
 #say-log .answer { font-size: calc(var(--said-size, 12.5px) - 1px); }
 .said .ask       { font-size: calc(var(--said-size, 12.5px) - 1px); }
 .said .meta      { font-size: calc(var(--said-size, 12.5px) - 2px); }
+
+/* ---------- รอคุณอยู่ ---------- */
+
+/* สีเตือนทั้งกล่อง ไม่ใช่แค่จุดเล็ก ๆ · กล่องนี้โผล่มาเมื่อมีอะไรค้างเท่านั้น
+   ถ้าไม่มีอะไรรอก็ไม่ควรกินที่บนจอเลย */
+.needs-you {
+  border: 1px solid var(--alert);
+  border-left-width: 3px;
+  background: color-mix(in srgb, var(--alert) 8%, var(--panel));
+  padding: 12px 14px;
+}
+
+.needs-you h2 { color: var(--alert); margin-top: 0; }
+
+.needs-you .count {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 5px;
+  margin-left: 6px;
+  border-radius: 9px;
+  background: var(--alert);
+  color: #14101a;
+  font-family: var(--mono);
+  font-size: 11px;
+  text-align: center;
+}
+
+.needs-you ul { list-style: none; margin: 0; padding: 0; }
+
+.needs-you li {
+  padding: 7px 0;
+  border-top: 1px solid color-mix(in srgb, var(--alert) 25%, transparent);
+}
+.needs-you li:first-child { border-top: 0; }
+
+.needs-you .who {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.needs-you .waited { font-family: var(--mono); font-weight: 400; color: var(--alert); }
+
+.needs-you .what {
+  margin-top: 3px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
