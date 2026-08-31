@@ -8,6 +8,21 @@ The one thing this model does that a plain activity feed does not: it carries
 the *model* on every worker. Hermes' ``post_api_request`` hook hands us model,
 provider and base URL on every call, so a character in the office can be labelled
 with the brain behind it and the tokens it has spent.
+
+**Facts are stored; what you see is computed.** Events write only things that
+are true and stay true — when somebody arrived, whether they are mid-thought,
+which tool is open, whether an approval is pending, when they finished. The
+activity a character shows is derived from those facts at read time, by one
+ordered set of rules in :func:`_display`.
+
+That split is the whole design, and it is worth stating why. The first version
+mutated ``activity`` and ``status`` directly on every event, which made what you
+saw depend on the order events happened to arrive in and on nothing ever being
+missed. Three bugs came out of that in one week: a character walked out of the
+room every time it finished answering, a session that resumed under its old id
+stayed flagged as gone, and a desk deleted from the roster kept its occupant.
+None of them are reachable now — there is no ``activity`` field to leave stale,
+because there is no ``activity`` field at all until somebody asks.
 """
 
 from __future__ import annotations
@@ -73,6 +88,55 @@ def activity_for_tool(tool_name: Optional[str]) -> str:
     return "working"
 
 
+# How long after arriving a character is still shown walking in. Short: it is an
+# animation cue, not a state anybody needs to read.
+ARRIVING_SECONDS = 4.0
+
+
+def _display(worker: dict[str, Any], now: float) -> tuple[str, str, bool]:
+    """``(activity, status, needs_input)`` for one worker, right now.
+
+    This is the only place a display value is decided, and the order below is
+    the whole rule. Read it top to bottom; the first line that matches wins.
+
+    ==========================  =============  ==========================================
+    when                        activity       why it outranks what follows
+    ==========================  =============  ==========================================
+    finished                    leaving        they are on their way out; nothing else matters
+    approval pending            waiting        the only state where nothing moves without a person
+    a tool is open              per the tool   the most specific thing we know they are doing
+    mid-thought                 thinking       they are working, we just cannot see at what
+    just arrived, nothing yet   arriving       still walking in
+    silent for a while          idle           no evidence of work for long enough to believe it
+    otherwise                   working        seen recently, nothing more specific
+    ==========================  =============  ==========================================
+
+    Nothing here is remembered. Two calls a second apart can disagree, and that
+    is the point: a character goes idle because time passed, not because some
+    event arrived to say so — and no event can leave a stale label behind.
+    """
+    if worker["finished_at"] is not None:
+        return "leaving", (worker["outcome"] or "closed"), False
+    if worker["awaiting_approval"]:
+        return "waiting", "waiting", True
+    if worker["tool"]:
+        return activity_for_tool(worker["tool"]), "running", False
+    if worker["thinking_since"] is not None:
+        return "thinking", "running", False
+    # "Arriving" has to mean *and nothing has happened since*, not merely that
+    # the clock is young: a session that starts and finishes a turn inside the
+    # window is not still walking in. updated_at moves on every event, so this
+    # holds only while the arrival is the last thing we know about.
+    if (
+        worker["updated_at"] <= worker["started_at"]
+        and (now - worker["started_at"]) < ARRIVING_SECONDS
+    ):
+        return "arriving", "running", False
+    if (now - worker["updated_at"]) > IDLE_AFTER_SECONDS:
+        return "idle", "waiting", False
+    return "working", "running", False
+
+
 def _num(value: Any) -> float:
     try:
         return float(value)
@@ -131,9 +195,16 @@ class Office:
     # -- helpers ------------------------------------------------------------
 
     def _worker(self, session_id: str, now: float) -> dict[str, Any]:
+        """The facts we hold about one character. Nothing here is a display value.
+
+        Every field is either identity (who this is, which model, which desk),
+        a counter, or a timestamp saying when something became true. What the
+        character is *doing* is not stored — :func:`_display` works it out.
+        """
         worker = self.workers.get(session_id)
         if worker is None:
             worker = {
+                # identity
                 "id": session_id,
                 "kind": "session",
                 "session_id": session_id,
@@ -147,18 +218,20 @@ class Office:
                 "model": "",
                 "provider": "",
                 "base_url": "",
-                "activity": "arriving",
-                "tool": None,
                 "goal": None,
-                "status": "running",
+                # when things became true
                 "started_at": now,
                 "updated_at": now,
-                "ended_at": None,
+                "thinking_since": None,   # mid-thought until the turn or thinking_done
+                "tool": None,             # the tool currently open, by name
+                "awaiting_approval": False,
+                "finished_at": None,      # a real departure, not the end of a turn
+                "outcome": "",            # completed / failed / interrupted / closed
+                # counters
                 "calls": 0,
                 "tokens_in": 0,
                 "tokens_out": 0,
                 "last_duration": None,
-                "needs_input": False,
             }
             self.workers[session_id] = worker
         return worker
@@ -237,18 +310,15 @@ class Office:
         worker["updated_at"] = now
 
         # A session can come back after it was finalized: the gateway resumes an
-        # interrupted session under the same id after a restart. Without this the
-        # worker stays flagged as gone, walks out of the room, and is dropped
-        # forty seconds later — while it is demonstrably still working.
-        if kind not in DEPARTURES and worker.get("ended_at") is not None:
-            worker["ended_at"] = None
-            worker["status"] = "running"
+        # interrupted session under the same id after a restart. Anything that is
+        # not itself a departure is proof it is still here.
+        if kind not in DEPARTURES and worker["finished_at"] is not None:
+            worker["finished_at"] = None
+            worker["outcome"] = ""
 
         if kind == "session_start":
             worker["platform"] = str(event.get("platform") or worker["platform"])
-            worker["activity"] = "arriving"
-            worker["status"] = "running"
-            worker["ended_at"] = None
+            worker["started_at"] = now
 
         elif kind == "subagent_start":
             subagent_id = str(event.get("subagent_id") or "")
@@ -256,8 +326,7 @@ class Office:
             worker["subagent_id"] = subagent_id or worker["subagent_id"]
             worker["parent_session_id"] = event.get("parent_session_id")
             worker["goal"] = event.get("goal") or worker["goal"]
-            worker["activity"] = "arriving"
-            worker["status"] = "running"
+            worker["started_at"] = now
             if subagent_id:
                 self.subagent_sessions[subagent_id] = session_id
                 pending = self.pending_desks.pop(subagent_id, None)
@@ -265,66 +334,60 @@ class Office:
                     self._apply_desk(worker, pending)
 
         elif kind == "subagent_stop":
-            worker["status"] = str(event.get("status") or "completed")
-            worker["activity"] = "leaving"
-            worker["ended_at"] = now
+            worker["outcome"] = str(event.get("status") or "completed")
+            worker["finished_at"] = now
+            worker["thinking_since"] = None
+            worker["tool"] = None
             if event.get("duration_ms") is not None:
                 worker["last_duration"] = _num(event.get("duration_ms")) / 1000.0
 
         elif kind == "session_end":
             # Despite the name, Hermes fires this at the end of every *turn*:
             # "Fired at the very end of every run_conversation call" (its own
-            # comment). Real session teardown is on_session_finalize. Treating a
-            # finished turn as a departure made the main session walk out of the
-            # room after every single reply.
-            worker["activity"] = "idle"
+            # comment). Real session teardown is on_session_finalize. So this
+            # ends the turn — it does not end the person.
+            worker["thinking_since"] = None
             worker["tool"] = None
-            worker["needs_input"] = False
+            worker["awaiting_approval"] = False
             if event.get("failed"):
-                worker["status"] = "failed"
+                worker["outcome"] = "failed"
             elif event.get("interrupted"):
-                worker["status"] = "interrupted"
-            else:
-                worker["status"] = "waiting"
+                worker["outcome"] = "interrupted"
             if event.get("model"):
                 worker["model"] = event["model"]
 
         elif kind in ("session_finalize", "session_reset"):
-            worker["activity"] = "leaving"
-            worker["status"] = "closed"
-            worker["ended_at"] = now
+            worker["outcome"] = "closed"
+            worker["finished_at"] = now
+            worker["thinking_since"] = None
+            worker["tool"] = None
 
         elif kind == "thinking":
-            worker["activity"] = "thinking"
-            worker["needs_input"] = False
+            worker["thinking_since"] = now
+            worker["awaiting_approval"] = False
             if event.get("model"):
                 worker["model"] = event["model"]
             if event.get("platform"):
                 worker["platform"] = event["platform"]
 
         elif kind == "thinking_done":
-            if worker["activity"] == "thinking":
-                worker["activity"] = "working"
+            worker["thinking_since"] = None
 
         elif kind == "tool_start":
             worker["tool"] = event.get("tool_name")
-            worker["activity"] = activity_for_tool(event.get("tool_name"))
 
         elif kind == "tool_end":
             worker["tool"] = None
-            worker["activity"] = "working"
 
         elif kind == "reply":
             # Nothing about the room changes; the words were already filed above.
             pass
 
         elif kind == "approval_wait":
-            worker["needs_input"] = True
-            worker["activity"] = "waiting"
+            worker["awaiting_approval"] = True
 
         elif kind == "approval_done":
-            worker["needs_input"] = False
-            worker["activity"] = "working"
+            worker["awaiting_approval"] = False
 
         elif kind == "api_request":
             tokens_in, tokens_out = _tokens(event.get("usage"))
@@ -452,15 +515,27 @@ class Office:
             now = time.time()
             workers = []
             for worker in self.workers.values():
-                ended = worker.get("ended_at")
+                ended = worker["finished_at"]
                 if ended is None and (now - worker["updated_at"]) > SILENT_AFTER_SECONDS:
                     # Never finalized, never heard from — the process is gone.
+                    # Hermes fires on_session_finalize on a clean exit; a killed
+                    # process never gets the chance, so silence has to count.
                     ended = worker["updated_at"]
                 if ended and (now - ended) > GONE_AFTER_SECONDS:
                     continue
+
                 view = dict(worker)
-                if not ended and (now - worker["updated_at"]) > IDLE_AFTER_SECONDS:
-                    view["activity"] = "idle"
+                # Facts stay as they are; the display values are worked out here
+                # and nowhere else. A worker whose silence just made it "gone"
+                # gets that treatment too, without its stored facts being touched.
+                if ended is not worker["finished_at"]:
+                    activity, status, needs_input = "leaving", "closed", False
+                else:
+                    activity, status, needs_input = _display(worker, now)
+                view["activity"] = activity
+                view["status"] = status
+                view["needs_input"] = needs_input
+                view["ended_at"] = ended
                 view["gone"] = bool(ended)
                 workers.append(view)
 
